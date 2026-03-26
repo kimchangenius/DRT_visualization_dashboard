@@ -1,0 +1,7 @@
+tensorflow==2.10.0
+flask>=3.0
+flask-socketio>=5.3
+flask-cors>=4.0
+numpy>=1.23,<2
+pandas>=1.5,<3
+h5py>=3.7,<4

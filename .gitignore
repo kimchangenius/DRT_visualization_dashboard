@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-ssr/
+*.local/
+.github/
+/server/__pycache__/
+/server/app/__pycache__/
+/server/result/
+
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
