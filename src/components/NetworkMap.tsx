@@ -9,7 +9,7 @@ interface NetworkMapProps {
 
 const PADDING = 10;
 const MAP_WIDTH = 200;
-const MAP_HEIGHT = 170;
+const MAP_HEIGHT = 180;
 
 const nodeById = new Map(nodes.map(n => [n.id, n]));
 
