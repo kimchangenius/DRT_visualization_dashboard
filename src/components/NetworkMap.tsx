@@ -7,9 +7,9 @@ interface NetworkMapProps {
   passengers: Passenger[];
 }
 
-const PADDING = 20;
+const PADDING = 10;
 const MAP_WIDTH = 200;
-const MAP_HEIGHT = 200;
+const MAP_HEIGHT = 170;
 
 const nodeById = new Map(nodes.map(n => [n.id, n]));
 
