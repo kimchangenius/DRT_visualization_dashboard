@@ -1,0 +1,26 @@
+# this file uses prebuilt images in Docker Hub (optional local build: docker compose build)
+# Push: set DRT_BACKEND_IMAGE / DRT_WEB_IMAGE to docker.io/<user>/<name>:tag, then build && push
+# Pull-only on server: docker compose pull && docker compose up -d
+#
+# 호스트 포트(.env 의 HOST_WEB_PORT) → 컨테이너 nginx 8080
+# 서버에서 8123·8234 등이 이미 쓰이면 18080처럼 비어 있는 포트로 두고,
+# 학교 NAT가 공인 8123을 이 서버의 HOST_WEB_PORT로 포워딩하도록 맞추면 됨.
+
+services:
+  backend:
+    image: ${DRT_BACKEND_IMAGE:-drt-visualization-dashboard-backend:latest}
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+
+  web:
+    image: ${DRT_WEB_IMAGE:-drt-visualization-dashboard-web:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${HOST_WEB_PORT:-18080}:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped

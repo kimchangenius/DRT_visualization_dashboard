@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { SimulationConfigPayload, SimulationState } from '../types/simulation';
-import { WS_URL, THROTTLE_MS } from '../config';
+import { getWsUrl, THROTTLE_MS } from '../config';
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
 
@@ -80,7 +80,7 @@ export function useWebSocketSimulation() {
   }, []);
 
   useEffect(() => {
-    const socket = io(WS_URL, {
+    const socket = io(getWsUrl(), {
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 30000,
