@@ -172,12 +172,12 @@ export default function SimulationControls({
                 <strong>{fmtInt(vehCapacity)}</strong>
               </dd>
             </div>
-            <div className="control-config-row">
+            {/* <div className="control-config-row">
               <dt>Max requests (slots)</dt>
               <dd>
                 <strong>{fmtInt(maxNumRequest)}</strong>
               </dd>
-            </div>
+            </div> */}
             <div className="control-config-row">
               <dt>Max wait time</dt>
               <dd>

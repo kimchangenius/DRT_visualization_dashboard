@@ -142,17 +142,17 @@ def compute_wait_time_distribution(environment):
     return [{'range': k, 'count': v} for k, v in buckets.items()]
 
 
-def compute_trip_status(environment):
+def compute_request_status(environment):
     served = sum(1 for r in environment.done_request_list if r.status == RequestStatus.SERVED)
     in_transit = sum(1 for r in environment.active_request_list if r.status == RequestStatus.PICKEDUP)
     waiting = sum(1 for r in environment.active_request_list
                   if r.status in (RequestStatus.PENDING, RequestStatus.ACCEPTED))
     cancelled = sum(1 for r in environment.done_request_list if r.status == RequestStatus.CANCELLED)
     return [
-        {'name': '완료', 'value': served, 'color': '#10b981'},
-        {'name': '운행중', 'value': in_transit, 'color': '#3b82f6'},
-        {'name': '대기중', 'value': waiting, 'color': '#f59e0b'},
-        {'name': '취소', 'value': cancelled, 'color': '#ef4444'},
+        {'name': 'Served', 'value': served, 'color': '#10b981'},
+        {'name': 'In vehicle', 'value': in_transit, 'color': '#3b82f6'},
+        {'name': 'Waiting', 'value': waiting, 'color': '#f59e0b'},
+        {'name': 'Cancelled', 'value': cancelled, 'color': '#ef4444'},
     ]
 
 
@@ -186,7 +186,7 @@ def build_state(environment):
         'waitTimeDistribution': compute_wait_time_distribution(environment),
         'utilizationHistory': list(utilization_history),
         'passengerHistory': list(passenger_history),
-        'tripStatusData': compute_trip_status(environment),
+        'requestStatusData': compute_request_status(environment),
         'linkLoads': compute_link_loads(environment),
     }
 

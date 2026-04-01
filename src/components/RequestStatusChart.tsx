@@ -1,17 +1,17 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
-import type { TripStatusData } from '../types/simulation';
+import type { RequestStatusData } from '../types/simulation';
 import { CHART_ANIMATION_DURATION_MS } from '../config';
 
-interface TripStatusChartProps {
-  data: TripStatusData[];
+interface RequestStatusChartProps {
+  data: RequestStatusData[];
 }
 
-export default function TripStatusChart({ data }: TripStatusChartProps) {
+export default function RequestStatusChart({ data }: RequestStatusChartProps) {
   const total = data.reduce((sum, d) => sum + d.value, 0);
 
   return (
     <div className="panel chart-panel">
-      <h3 className="panel-title">Trip Status</h3>
+      <h3 className="panel-title">Request Status Overview</h3>
       <div className="chart-container">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>

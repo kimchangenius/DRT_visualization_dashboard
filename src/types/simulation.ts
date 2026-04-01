@@ -75,7 +75,7 @@ export interface PassengerTimeSeriesPoint {
   cancelled: number;
 }
 
-export interface TripStatusData {
+export interface RequestStatusData {
   name: string;
   value: number;
   color: string;
@@ -91,7 +91,6 @@ export interface SimulationConfigPayload {
   learningRate: number;
 }
 
-/** 서버 `config.py` / `sim_meta`와 동기화되는 시뮬·학습 메타(표시 전용) */
 export interface SimulationState extends SimulationConfigPayload {
   metrics: SimulationMetrics;
   vehicles: Vehicle[];
@@ -99,7 +98,7 @@ export interface SimulationState extends SimulationConfigPayload {
   waitTimeDistribution: WaitTimeDistribution[];
   utilizationHistory: UtilizationTimeSeriesPoint[];
   passengerHistory: PassengerTimeSeriesPoint[];
-  tripStatusData: TripStatusData[];
+  requestStatusData: RequestStatusData[];
   linkLoads: Record<string, number>;
 }
 

@@ -7,7 +7,7 @@ import MetricsPanel from './components/MetricsPanel';
 import RequestInformation from './components/RequestInformation';
 import VehicleUtilChart from './components/VehicleUtilChart';
 import PassengerChart from './components/PassengerChart';
-import TripStatusChart from './components/TripStatusChart';
+import RequestStatusChart from './components/RequestStatusChart';
 import './App.css';
 
 export default function App() {
@@ -67,7 +67,7 @@ export default function App() {
           <RequestInformation passengers={state.passengers} currentTime={state.metrics.currentTime} />
           <VehicleUtilChart data={state.utilizationHistory} />
           <PassengerChart data={state.passengerHistory} />
-          <TripStatusChart data={state.tripStatusData} />
+          <RequestStatusChart data={state.requestStatusData} />
         </aside>
       </div>
     </div>

@@ -30,7 +30,7 @@ export const SIMULATION_INITIAL_STATE: SimulationState = {
   waitTimeDistribution: [],
   utilizationHistory: [],
   passengerHistory: [],
-  tripStatusData: [],
+  requestStatusData: [],
   linkLoads: {},
 };
 
