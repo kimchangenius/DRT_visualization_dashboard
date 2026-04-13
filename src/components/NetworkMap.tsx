@@ -5,6 +5,9 @@ import type { Vehicle, Passenger } from '../types/simulation';
 interface NetworkMapProps {
   vehicles: Vehicle[];
   passengers: Passenger[];
+  analysisVehicleId?: number | null;
+  routeEdges?: [number, number][];
+  analysisPassengers?: Passenger[];
 }
 
 const PADDING = 10;
@@ -13,7 +16,6 @@ const MAP_HEIGHT = 180;
 
 const nodeById = new Map(nodes.map(n => [n.id, n]));
 
-/** Undirected adjacency for edge-following vehicle motion (matches drawn links). */
 const adjacency = new Map<number, Set<number>>();
 for (const l of links) {
   if (!adjacency.has(l.from)) adjacency.set(l.from, new Set());
@@ -91,7 +93,6 @@ function normalizeEdgeKey(a: number, b: number): string {
   return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
 
-/** Undirected edge key → 차량 상태색 목록 (이동 경로상 링크마다 1회) */
 function buildMovingLinkColors(vehicles: Vehicle[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const v of vehicles) {
@@ -132,15 +133,56 @@ function getVehiclePosition(v: Vehicle) {
   return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
 }
 
-export default function NetworkMap({ vehicles, passengers }: NetworkMapProps) {
+const ROUTE_TRACE_COLOR = '#a78bfa';
+const PICKUP_COLOR = '#f59e0b';
+const DROPOFF_COLOR = '#10b981';
+
+export default function NetworkMap({
+  vehicles,
+  passengers,
+  analysisVehicleId,
+  routeEdges,
+  analysisPassengers,
+}: NetworkMapProps) {
+  const inAnalysis = analysisVehicleId != null;
+
   const waitingByNode = new Map<number, number>();
-  for (const p of passengers) {
-    if (p.status === 'waiting') {
-      waitingByNode.set(p.originNodeId, (waitingByNode.get(p.originNodeId) || 0) + 1);
+  if (!inAnalysis) {
+    for (const p of passengers) {
+      if (p.status === 'waiting') {
+        waitingByNode.set(p.originNodeId, (waitingByNode.get(p.originNodeId) || 0) + 1);
+      }
     }
   }
 
   const movingLinkColors = useMemo(() => buildMovingLinkColors(vehicles), [vehicles]);
+
+  const routeEdgeKeys = useMemo(() => {
+    if (!routeEdges) return new Set<string>();
+    return new Set(routeEdges.map(([a, b]) => normalizeEdgeKey(a, b)));
+  }, [routeEdges]);
+
+  const passengerMarkers = useMemo(() => {
+    if (!inAnalysis || !analysisPassengers) return [];
+    const markers: { x: number; y: number; type: 'pickup' | 'dropoff'; id: number }[] = [];
+    const seenPickup = new Set<string>();
+    const seenDropoff = new Set<string>();
+    for (const p of analysisPassengers) {
+      const oNode = nodeById.get(p.originNodeId);
+      const dNode = nodeById.get(p.destinationNodeId);
+      const oKey = `${p.originNodeId}`;
+      const dKey = `${p.destinationNodeId}`;
+      if (oNode && !seenPickup.has(oKey)) {
+        seenPickup.add(oKey);
+        markers.push({ x: oNode.x, y: oNode.y, type: 'pickup', id: p.originNodeId });
+      }
+      if (dNode && !seenDropoff.has(dKey)) {
+        seenDropoff.add(dKey);
+        markers.push({ x: dNode.x, y: dNode.y, type: 'dropoff', id: p.destinationNodeId });
+      }
+    }
+    return markers;
+  }, [inAnalysis, analysisPassengers]);
 
   return (
     <div className="panel network-panel">
@@ -156,6 +198,21 @@ export default function NetworkMap({ vehicles, passengers }: NetworkMapProps) {
             const to = nodeById.get(link.to);
             if (!from || !to) return null;
             const edgeKey = normalizeEdgeKey(link.from, link.to);
+            const isOnRoute = inAnalysis && routeEdgeKeys.has(edgeKey);
+
+            if (inAnalysis) {
+              return (
+                <line
+                  key={`link-${link.id}`}
+                  x1={from.x} y1={from.y}
+                  x2={to.x} y2={to.y}
+                  stroke={isOnRoute ? ROUTE_TRACE_COLOR : '#4b5563'}
+                  strokeWidth={isOnRoute ? 2.5 : 0.8}
+                  strokeOpacity={isOnRoute ? 0.85 : 0.25}
+                />
+              );
+            }
+
             const colorsOnEdge = movingLinkColors.get(edgeKey);
             const load = colorsOnEdge?.length ?? 0;
             const strokeColor =
@@ -212,21 +269,66 @@ export default function NetworkMap({ vehicles, passengers }: NetworkMapProps) {
             );
           })}
 
+          {inAnalysis && passengerMarkers.map(m => {
+            const size = 4;
+            if (m.type === 'pickup') {
+              return (
+                <g key={`pm-pickup-${m.id}`}>
+                  <polygon
+                    points={`${m.x},${m.y - size - 2} ${m.x + size},${m.y + 2} ${m.x - size},${m.y + 2}`}
+                    fill={PICKUP_COLOR}
+                    fillOpacity={0.7}
+                    stroke={PICKUP_COLOR}
+                    strokeWidth={0.5}
+                  />
+                  <text
+                    x={m.x} y={m.y - size - 4}
+                    textAnchor="middle" fill={PICKUP_COLOR}
+                    fontSize={4} fontWeight="bold"
+                  >
+                    P
+                  </text>
+                </g>
+              );
+            }
+            return (
+              <g key={`pm-dropoff-${m.id}`}>
+                <polygon
+                  points={`${m.x},${m.y + size + 2} ${m.x + size},${m.y - 2} ${m.x - size},${m.y - 2}`}
+                  fill={DROPOFF_COLOR}
+                  fillOpacity={0.7}
+                  stroke={DROPOFF_COLOR}
+                  strokeWidth={0.5}
+                />
+                <text
+                  x={m.x} y={m.y + size + 7}
+                  textAnchor="middle" fill={DROPOFF_COLOR}
+                  fontSize={4} fontWeight="bold"
+                >
+                  D
+                </text>
+              </g>
+            );
+          })}
+
           {vehicles.map(v => {
             const pos = getVehiclePosition(v);
+            const dimmed = inAnalysis && v.id !== analysisVehicleId;
             return (
-              <g key={`vehicle-${v.id}`}>
+              <g key={`vehicle-${v.id}`} opacity={dimmed ? 0.15 : 1}>
                 <circle
                   cx={pos.x} cy={pos.y} r={4}
                   fill={vehicleColor(v.status)}
                   stroke="#fff" strokeWidth={1.2}
                 >
-                  <animate
-                    attributeName="r"
-                    values="4;5;4"
-                    dur="1.5s"
-                    repeatCount="indefinite"
-                  />
+                  {!dimmed && (
+                    <animate
+                      attributeName="r"
+                      values="4;5;4"
+                      dur="1.5s"
+                      repeatCount="indefinite"
+                    />
+                  )}
                 </circle>
                 <text
                   x={pos.x} y={pos.y - 7}
@@ -241,18 +343,34 @@ export default function NetworkMap({ vehicles, passengers }: NetworkMapProps) {
         </svg>
 
         <div className="map-legend">
-          <div className="legend-item">
-            <span className="legend-dot" style={{ background: '#3b82f6' }} /> Idle
-          </div>
-          <div className="legend-item">
-            <span className="legend-dot" style={{ background: '#f59e0b' }} /> Picking up
-          </div>
-          <div className="legend-item">
-            <span className="legend-dot" style={{ background: '#10b981' }} /> Carrying
-          </div>
-          <div className="legend-item">
-            <span className="legend-dot" style={{ background: '#f59e0b', opacity: 0.4 }} /> Waiting Passenger
-          </div>
+          {inAnalysis ? (
+            <>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: ROUTE_TRACE_COLOR }} /> Route Trace
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: PICKUP_COLOR }} /> Pickup
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: DROPOFF_COLOR }} /> Dropoff
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: '#3b82f6' }} /> Idle
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: '#f59e0b' }} /> Picking up
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: '#10b981' }} /> Carrying
+              </div>
+              <div className="legend-item">
+                <span className="legend-dot" style={{ background: '#f59e0b', opacity: 0.4 }} /> Waiting Passenger
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

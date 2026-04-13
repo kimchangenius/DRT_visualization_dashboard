@@ -1,16 +1,27 @@
+import { useCallback, useMemo } from 'react';
 import { useWebSocketSimulation } from './hooks/useWebSocketSimulation';
+import { useSimulationHistory } from './hooks/useSimulationHistory';
 import Header from './components/Header';
 import SimulationControls from './components/SimulationControls';
 import NetworkMap from './components/NetworkMap';
 import MetricsPanel from './components/MetricsPanel';
-// import WaitTimeChart from './components/WaitTimeChart';
 import RequestInformation from './components/RequestInformation';
 import VehicleUtilChart from './components/VehicleUtilChart';
 import PassengerChart from './components/PassengerChart';
 import RequestStatusChart from './components/RequestStatusChart';
+import WaitTimeBarChart from './components/WaitTimeBarChart';
+import DetourFactorChart from './components/DetourFactorChart';
+import OperationalEfficiencyChart from './components/OperationalEfficiencyChart';
 import './App.css';
 
 export default function App() {
+  const history = useSimulationHistory();
+
+  const onFrameConsumed = useCallback(
+    (s: Parameters<typeof history.addFrame>[0]) => history.addFrame(s),
+    [history.addFrame],
+  );
+
   const {
     state,
     connectionStatus,
@@ -19,8 +30,34 @@ export default function App() {
     speed,
     start,
     stop,
-    reset,
-  } = useWebSocketSimulation();
+    reset: wsReset,
+  } = useWebSocketSimulation({ onFrameConsumed });
+
+  const reset = useCallback(() => {
+    history.clearHistory();
+    wsReset();
+  }, [history.clearHistory, wsReset]);
+
+  const analysisActive =
+    !isRunning && history.hasHistory && history.analysisVehicleId != null;
+  const canAnalyse = !isRunning && history.hasHistory;
+
+  const analysisVehicles = useMemo(() => {
+    if (!analysisActive || !history.analysis?.currentVehicle) return state.vehicles;
+    return state.vehicles;
+  }, [analysisActive, history.analysis, state.vehicles]);
+
+  const metrics = analysisActive && history.analysis
+    ? history.analysis.metrics
+    : state.metrics;
+
+  const passengers = analysisActive && history.analysis
+    ? history.analysis.assignedPassengers
+    : state.passengers;
+
+  const currentTime = analysisActive
+    ? history.replayTime
+    : state.metrics.currentTime;
 
   return (
     <div className="app">
@@ -29,11 +66,11 @@ export default function App() {
           <div className="dashboard-left-top">
             <div className="dashboard-left-top-row">
               <Header
-                currentTime={state.metrics.currentTime}
+                currentTime={currentTime}
                 connectionStatus={connectionStatus}
                 reconnectAttempt={reconnectAttempt}
               />
-              <MetricsPanel metrics={state.metrics} />
+              <MetricsPanel metrics={metrics} />
             </div>
           </div>
 
@@ -54,20 +91,48 @@ export default function App() {
                 onStart={start}
                 onStop={stop}
                 onReset={reset}
+                analysisMode={canAnalyse}
+                analysisVehicleId={history.analysisVehicleId}
+                analysisVehicleIds={history.vehicleIds}
+                onSelectAnalysisVehicle={history.selectVehicle}
+                replayTime={history.replayTime}
+                onReplayTimeChange={history.setReplayTime}
+                isReplaying={history.isReplaying}
+                onToggleReplay={history.toggleReplay}
+                timeRange={history.timeRange}
               />
             </aside>
 
             <section className="dashboard-left-map">
-              <NetworkMap vehicles={state.vehicles} passengers={state.passengers} />
+              <NetworkMap
+                vehicles={analysisVehicles}
+                passengers={analysisActive ? [] : state.passengers}
+                analysisVehicleId={analysisActive ? history.analysisVehicleId : undefined}
+                routeEdges={analysisActive ? history.analysis?.routeEdges : undefined}
+                analysisPassengers={analysisActive ? history.analysis?.assignedPassengers : undefined}
+              />
             </section>
           </div>
         </div>
 
         <aside className="dashboard-layout-right">
-          <RequestInformation passengers={state.passengers} currentTime={state.metrics.currentTime} />
-          <VehicleUtilChart data={state.utilizationHistory} />
-          <PassengerChart data={state.passengerHistory} />
-          <RequestStatusChart data={state.requestStatusData} />
+          <RequestInformation passengers={passengers} currentTime={currentTime} />
+          {analysisActive && history.analysis ? (
+            <>
+              <WaitTimeBarChart
+                data={history.analysis.waitTimeData}
+                maxWaitTime={state.maxWaitTime}
+              />
+              <DetourFactorChart data={history.analysis.detourFactorData} />
+              <OperationalEfficiencyChart data={history.analysis.efficiencyData} />
+            </>
+          ) : (
+            <>
+              <VehicleUtilChart data={state.utilizationHistory} />
+              <PassengerChart data={state.passengerHistory} />
+              <RequestStatusChart data={state.requestStatusData} />
+            </>
+          )}
         </aside>
       </div>
     </div>

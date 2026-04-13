@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { SimulationConfigPayload, SimulationState } from '../types/simulation';
-import { getWsUrl, THROTTLE_MS } from '../config';
+import { getWsUrl, PLAYBACK_INTERVAL_MS } from '../config';
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
 
@@ -35,7 +35,11 @@ export const SIMULATION_INITIAL_STATE: SimulationState = {
 };
 
 
-export function useWebSocketSimulation() {
+export interface WebSocketSimulationOptions {
+  onFrameConsumed?: (state: SimulationState) => void;
+}
+
+export function useWebSocketSimulation(options: WebSocketSimulationOptions = {}) {
   const socketRef = useRef<Socket | null>(null);
   const applyServerStateRef = useRef(false);
   const [state, setState] = useState<SimulationState>(SIMULATION_INITIAL_STATE);
@@ -44,52 +48,33 @@ export function useWebSocketSimulation() {
   const [isRunning, setIsRunning] = useState(false);
   const [speed, setSpeedState] = useState(1);
 
-  const lastUpdateRef = useRef(0);
-  const pendingStateRef = useRef<SimulationState | null>(null);
-  const throttleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bufferRef = useRef<SimulationState[]>([]);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const onFrameConsumedRef = useRef(options.onFrameConsumed);
+  onFrameConsumedRef.current = options.onFrameConsumed;
 
-  const clearThrottleTimer = useCallback(() => {
-    if (throttleTimeoutRef.current !== null) {
-      clearTimeout(throttleTimeoutRef.current);
-      throttleTimeoutRef.current = null;
+  const stopPlayback = useCallback(() => {
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
   }, []);
 
-  const throttledSetState = useCallback(
-    (newState: SimulationState) => {
-      const now = performance.now();
-      const elapsed = now - lastUpdateRef.current;
+  const flushBuffer = useCallback(() => {
+    stopPlayback();
+    bufferRef.current = [];
+  }, [stopPlayback]);
 
-      if (elapsed >= THROTTLE_MS) {
-        clearThrottleTimer();
-        lastUpdateRef.current = now;
-        setState(newState);
-        pendingStateRef.current = null;
-        return;
+  const startPlayback = useCallback(() => {
+    if (intervalRef.current !== null) return;
+    intervalRef.current = setInterval(() => {
+      const next = bufferRef.current.shift();
+      if (next) {
+        setState(next);
+        onFrameConsumedRef.current?.(next);
       }
-
-      pendingStateRef.current = newState;
-      if (throttleTimeoutRef.current !== null) return;
-
-      const delay = THROTTLE_MS - elapsed;
-      throttleTimeoutRef.current = setTimeout(() => {
-        throttleTimeoutRef.current = null;
-        const pending = pendingStateRef.current;
-        if (pending) {
-          lastUpdateRef.current = performance.now();
-          setState(pending);
-          pendingStateRef.current = null;
-        }
-      }, delay);
-    },
-    [clearThrottleTimer],
-  );
-
-  const clearPendingVisualUpdates = useCallback(() => {
-    clearThrottleTimer();
-    pendingStateRef.current = null;
-    lastUpdateRef.current = 0;
-  }, [clearThrottleTimer]);
+    }, PLAYBACK_INTERVAL_MS);
+  }, []);
 
   useEffect(() => {
     const socket = io(getWsUrl(), {
@@ -97,14 +82,13 @@ export function useWebSocketSimulation() {
       reconnectionDelay: 1000,
       reconnectionDelayMax: 30000,
       reconnectionAttempts: Infinity,
-      // transports: ['websocket', 'polling'],
       transports: ['polling'],
     });
     socketRef.current = socket;
 
     socket.on('connect', () => {
       applyServerStateRef.current = false;
-      clearPendingVisualUpdates();
+      flushBuffer();
       setState(SIMULATION_INITIAL_STATE);
       setIsRunning(false);
       setConnectionStatus('connected');
@@ -113,7 +97,7 @@ export function useWebSocketSimulation() {
 
     socket.on('disconnect', () => {
       applyServerStateRef.current = false;
-      clearPendingVisualUpdates();
+      flushBuffer();
       setState(SIMULATION_INITIAL_STATE);
       setIsRunning(false);
       setConnectionStatus('disconnected');
@@ -142,15 +126,31 @@ export function useWebSocketSimulation() {
 
     socket.on('state', (data: SimulationState) => {
       if (!applyServerStateRef.current) return;
-      throttledSetState(data);
+      bufferRef.current.push(data);
+    });
+
+    socket.on('sim_done', () => {
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      for (const frame of bufferRef.current) {
+        onFrameConsumedRef.current?.(frame);
+      }
+      const last = bufferRef.current[bufferRef.current.length - 1];
+      if (last) {
+        setState(last);
+      }
+      bufferRef.current = [];
+      setIsRunning(false);
     });
 
     return () => {
       socket.disconnect();
       socketRef.current = null;
-      clearPendingVisualUpdates();
+      flushBuffer();
     };
-  }, [throttledSetState, clearPendingVisualUpdates]);
+  }, [flushBuffer]);
 
   const sendCommand = useCallback((type: string, payload?: number) => {
     socketRef.current?.emit('command', { type, payload });
@@ -160,17 +160,26 @@ export function useWebSocketSimulation() {
     applyServerStateRef.current = true;
     sendCommand('start');
     setIsRunning(true);
-  }, [sendCommand]);
+    startPlayback();
+  }, [sendCommand, startPlayback]);
 
   const stop = useCallback(() => {
     sendCommand('stop');
-    clearPendingVisualUpdates();
+    stopPlayback();
+    for (const frame of bufferRef.current) {
+      onFrameConsumedRef.current?.(frame);
+    }
+    const last = bufferRef.current[bufferRef.current.length - 1];
+    if (last) {
+      setState(last);
+    }
+    bufferRef.current = [];
     setIsRunning(false);
-  }, [sendCommand, clearPendingVisualUpdates]);
+  }, [sendCommand, stopPlayback]);
 
   const reset = useCallback(() => {
     applyServerStateRef.current = false;
-    clearPendingVisualUpdates();
+    flushBuffer();
     setState(prev => ({
       ...SIMULATION_INITIAL_STATE,
       maxNumVehicles: prev.maxNumVehicles,
@@ -183,7 +192,7 @@ export function useWebSocketSimulation() {
     }));
     sendCommand('reset');
     setIsRunning(false);
-  }, [sendCommand, clearPendingVisualUpdates]);
+  }, [sendCommand, flushBuffer]);
 
   const setSpeed = useCallback((newSpeed: number) => {
     setSpeedState(newSpeed);

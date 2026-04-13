@@ -7,6 +7,6 @@ export function getWsUrl(): string {
   return 'http://localhost:5001';
 }
 
-export const THROTTLE_MS = 100;
+export const PLAYBACK_INTERVAL_MS = 1000;
 
-export const CHART_ANIMATION_DURATION_MS = Math.round(THROTTLE_MS * 0.75);
+export const CHART_ANIMATION_DURATION_MS = Math.round(PLAYBACK_INTERVAL_MS * 0.75);

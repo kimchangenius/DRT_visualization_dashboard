@@ -1,12 +1,13 @@
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import type { PassengerTimeSeriesPoint } from '../types/simulation';
 import { CHART_ANIMATION_DURATION_MS } from '../config';
 
 interface PassengerChartProps {
   data: PassengerTimeSeriesPoint[];
+  replayTime?: number;
 }
 
-export default function PassengerChart({ data }: PassengerChartProps) {
+export default function PassengerChart({ data, replayTime }: PassengerChartProps) {
   return (
     <div className="panel chart-panel">
       <h3 className="panel-title">Passenger Overview</h3>
@@ -34,6 +35,14 @@ export default function PassengerChart({ data }: PassengerChartProps) {
               contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8 }}
               labelStyle={{ color: '#e2e8f0' }}
             />
+            {replayTime != null && (
+              <ReferenceLine
+                x={replayTime}
+                stroke="#a78bfa"
+                strokeDasharray="4 2"
+                strokeWidth={1.5}
+              />
+            )}
             <Area
               type="monotone"
               dataKey="served"

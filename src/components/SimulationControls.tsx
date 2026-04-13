@@ -16,6 +16,15 @@ interface SimulationControlsProps {
   onStart: () => void;
   onStop: () => void;
   onReset: () => void;
+  analysisMode: boolean;
+  analysisVehicleId: number | null;
+  analysisVehicleIds: number[];
+  onSelectAnalysisVehicle: (id: number | null) => void;
+  replayTime: number;
+  onReplayTimeChange: (t: number) => void;
+  isReplaying: boolean;
+  onToggleReplay: () => void;
+  timeRange: { min: number; max: number };
 }
 
 function fmtInt(n: number): string {
@@ -99,12 +108,17 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
   );
 }
 
+function formatSimTime(t: number): string {
+  const h = Math.floor(t / 60);
+  const m = t % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
 export default function SimulationControls({
   isRunning,
   maxNumVehicles,
   vehCapacity,
   maxWaitTime,
-  maxNumRequest,
   hiddenDim,
   batchSize,
   learningRate,
@@ -113,6 +127,15 @@ export default function SimulationControls({
   onStart,
   onStop,
   onReset,
+  analysisMode,
+  analysisVehicleId,
+  analysisVehicleIds,
+  onSelectAnalysisVehicle,
+  replayTime,
+  onReplayTimeChange,
+  isReplaying,
+  onToggleReplay,
+  timeRange,
 }: SimulationControlsProps) {
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
 
@@ -138,6 +161,12 @@ export default function SimulationControls({
 
   const vehicleButtonsDisabled = vehicles.length === 0;
 
+  const handleAnalysisVehicleClick = useCallback((id: number) => {
+    onSelectAnalysisVehicle(analysisVehicleId === id ? null : id);
+  }, [analysisVehicleId, onSelectAnalysisVehicle]);
+
+  const showAnalysisVehicles = analysisMode && analysisVehicleIds.length > 0;
+
   return (
     <div className="panel controls-panel">
       <h3 className="panel-title">Simulation Controls</h3>
@@ -146,6 +175,10 @@ export default function SimulationControls({
           {isRunning ? (
             <button type="button" className="btn btn-warning" onClick={onStop}>
               ⏸ Pause
+            </button>
+          ) : analysisMode ? (
+            <button type="button" className="btn btn-analysis" disabled aria-label="Analysis mode active">
+              Analysis Mode
             </button>
           ) : (
             <button type="button" className="btn btn-primary" onClick={onStart}>
@@ -172,12 +205,6 @@ export default function SimulationControls({
                 <strong>{fmtInt(vehCapacity)}</strong>
               </dd>
             </div>
-            {/* <div className="control-config-row">
-              <dt>Max requests (slots)</dt>
-              <dd>
-                <strong>{fmtInt(maxNumRequest)}</strong>
-              </dd>
-            </div> */}
             <div className="control-config-row">
               <dt>Max wait time</dt>
               <dd>
@@ -208,47 +235,107 @@ export default function SimulationControls({
             </div>
           </dl>
 
-          <div className="control-vehicles">
-            <div className="control-vehicles-title">Vehicles Information</div>
-            {vehicles.length === 0 ? (
-              <p className="control-vehicles-hint">The list of vehicles running in the simulation is displayed here.</p>
-            ) : (
+          {showAnalysisVehicles ? (
+            <div className="control-vehicles">
+              <div className="control-vehicles-title">Vehicle Analysis</div>
+              <p className="control-vehicles-hint">
+                Select a vehicle to analyze its operation log.
+              </p>
               <div
                 className="control-vehicle-buttons"
                 role="group"
-                aria-label="Vehicle status panels"
+                aria-label="Vehicle analysis selection"
               >
-                {vehicles.map(v => {
-                  const selected = selectedVehicleIds.includes(v.id);
+                {analysisVehicleIds.map(id => {
+                  const selected = analysisVehicleId === id;
                   return (
                     <button
-                      key={v.id}
+                      key={id}
                       type="button"
-                      className={`control-vehicle-chip${selected ? ' is-selected' : ''}`}
-                      onClick={() => toggleVehicleSelection(v.id)}
-                      disabled={vehicleButtonsDisabled}
-                      title={
-                        vehicleButtonsDisabled
-                          ? 'No vehicle data'
-                          : selected
-                            ? 'Click to close panel'
-                            : 'Click to add status panel'
-                      }
+                      className={`control-vehicle-chip${selected ? ' is-analysis-selected' : ''}`}
+                      onClick={() => handleAnalysisVehicleClick(id)}
+                      title={selected ? 'Click to exit analysis' : 'Click to analyze this vehicle'}
                     >
-                      V{v.id}
+                      V{id}
                     </button>
                   );
                 })}
               </div>
-            )}
-            {selectedPanels.length > 0 ? (
-              <div className="control-vehicle-status-list">
-                {selectedPanels.map(({ id, vehicle }) =>
-                  vehicle && <VehicleStatusCard key={id} vehicle={vehicle} passengers={passengers} />
-                )}
-              </div>
-            ) : null}
-          </div>
+
+              {analysisVehicleId !== null && (
+                <div className="replay-controls">
+                  <div className="replay-header">
+                    <span className="analysis-badge">
+                      Analysis: Vehicle {analysisVehicleId}
+                    </span>
+                  </div>
+                  <div className="replay-slider-row">
+                    <button
+                      type="button"
+                      className="btn replay-btn"
+                      onClick={onToggleReplay}
+                      title={isReplaying ? 'Pause replay' : 'Play replay'}
+                    >
+                      {isReplaying ? '⏸' : '▶'}
+                    </button>
+                    <input
+                      type="range"
+                      className="slider replay-slider"
+                      min={timeRange.min}
+                      max={timeRange.max}
+                      value={replayTime}
+                      onChange={e => onReplayTimeChange(Number(e.target.value))}
+                    />
+                  </div>
+                  <div className="replay-time-label">
+                    t = {formatSimTime(replayTime)}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="control-vehicles">
+              <div className="control-vehicles-title">Vehicles Information</div>
+              {vehicles.length === 0 ? (
+                <p className="control-vehicles-hint">The list of vehicles running in the simulation is displayed here.</p>
+              ) : (
+                <div
+                  className="control-vehicle-buttons"
+                  role="group"
+                  aria-label="Vehicle status panels"
+                >
+                  {vehicles.map(v => {
+                    const selected = selectedVehicleIds.includes(v.id);
+                    return (
+                      <button
+                        key={v.id}
+                        type="button"
+                        className={`control-vehicle-chip${selected ? ' is-selected' : ''}`}
+                        onClick={() => toggleVehicleSelection(v.id)}
+                        disabled={vehicleButtonsDisabled}
+                        title={
+                          vehicleButtonsDisabled
+                            ? 'No vehicle data'
+                            : selected
+                              ? 'Click to close panel'
+                              : 'Click to add status panel'
+                        }
+                      >
+                        V{v.id}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {selectedPanels.length > 0 ? (
+                <div className="control-vehicle-status-list">
+                  {selectedPanels.map(({ id, vehicle }) =>
+                    vehicle && <VehicleStatusCard key={id} vehicle={vehicle} passengers={passengers} />
+                  )}
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
     </div>

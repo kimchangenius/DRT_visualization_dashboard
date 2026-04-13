@@ -1,12 +1,13 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import type { UtilizationTimeSeriesPoint } from '../types/simulation';
 import { CHART_ANIMATION_DURATION_MS } from '../config';
 
 interface VehicleUtilChartProps {
   data: UtilizationTimeSeriesPoint[];
+  replayTime?: number;
 }
 
-export default function VehicleUtilChart({ data }: VehicleUtilChartProps) {
+export default function VehicleUtilChart({ data, replayTime }: VehicleUtilChartProps) {
   return (
     <div className="panel chart-panel">
       <h3 className="panel-title">Vehicle Utilization (%)</h3>
@@ -21,6 +22,14 @@ export default function VehicleUtilChart({ data }: VehicleUtilChartProps) {
               labelStyle={{ color: '#e2e8f0' }}
               formatter={(value: number) => [`${value}%`, 'Utilization']}
             />
+            {replayTime != null && (
+              <ReferenceLine
+                x={replayTime}
+                stroke="#a78bfa"
+                strokeDasharray="4 2"
+                strokeWidth={1.5}
+              />
+            )}
             <Line
               type="monotone"
               dataKey="utilization"

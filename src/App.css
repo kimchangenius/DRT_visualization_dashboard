@@ -305,6 +305,20 @@
   background: rgba(239, 68, 68, 0.25);
 }
 
+.btn-analysis {
+  background: rgba(167, 139, 250, 0.18);
+  color: #c4b5fd;
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  cursor: default;
+  letter-spacing: 0.03em;
+}
+
+.btn-analysis:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+  opacity: 1;
+}
+
 .control-group {
   display: flex;
   flex-direction: column;
@@ -589,6 +603,57 @@
   width: 100%;
 }
 
+.chart-empty {
+  margin: 0;
+  padding: 16px;
+  font-size: 0.75rem;
+  color: var(--text-muted, #94a3b8);
+  text-align: center;
+}
+
+/* ---- Operational Efficiency Chart ---- */
+.efficiency-chart-layout {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.efficiency-pie {
+  flex: 1 1 55%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.efficiency-kpis {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.efficiency-kpi {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.efficiency-kpi-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.efficiency-kpi-label {
+  font-size: 0.58rem;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* ---- Request Information (replaces wait-time chart slot) ---- */
 .request-information-panel .panel-title {
   margin-bottom: 4px;
@@ -670,6 +735,78 @@
 
 .request-information-status--cancelled {
   color: #f87171;
+}
+
+/* ---- Analysis Mode: Vehicle Chip (selected for analysis) ---- */
+.control-vehicle-chip.is-analysis-selected {
+  border-color: #a78bfa;
+  background: color-mix(in srgb, #a78bfa 22%, transparent);
+  color: #e9e0ff;
+  box-shadow: 0 0 0 2px rgba(167, 139, 250, 0.3);
+}
+
+/* ---- Replay Controls ---- */
+.replay-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  background: rgba(167, 139, 250, 0.06);
+}
+
+.replay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.analysis-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #c4b5fd;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.replay-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.replay-btn {
+  flex: 0 0 auto;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0;
+  font-size: 0.75rem;
+  background: rgba(167, 139, 250, 0.2);
+  color: #c4b5fd;
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  border-radius: 6px;
+}
+
+.replay-btn:hover {
+  background: rgba(167, 139, 250, 0.35);
+}
+
+.replay-slider {
+  flex: 1;
+  min-width: 0;
+}
+
+.replay-slider::-webkit-slider-thumb {
+  background: #a78bfa;
+}
+
+.replay-time-label {
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 /* ---- Recharts tooltip ---- */

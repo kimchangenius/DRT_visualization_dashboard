@@ -85,3 +85,29 @@ export function getAdjacency(): Map<number, { to: number; distance: number }[]> 
   }
   return adj;
 }
+
+const fftAdj = new Map<number, { to: number; time: number }[]>();
+for (const node of nodes) fftAdj.set(node.id, []);
+for (const l of links) fftAdj.get(l.from)!.push({ to: l.to, time: l.freeFlowTime });
+
+export function shortestTravelTime(from: number, to: number): number | null {
+  if (from === to) return 0;
+  const dist = new Map<number, number>();
+  dist.set(from, 0);
+  const pq: [number, number][] = [[0, from]];
+
+  while (pq.length > 0) {
+    pq.sort((a, b) => a[0] - b[0]);
+    const [d, u] = pq.shift()!;
+    if (d > (dist.get(u) ?? Infinity)) continue;
+    if (u === to) return d;
+    for (const edge of fftAdj.get(u) ?? []) {
+      const nd = d + edge.time;
+      if (nd < (dist.get(edge.to) ?? Infinity)) {
+        dist.set(edge.to, nd);
+        pq.push([nd, edge.to]);
+      }
+    }
+  }
+  return null;
+}

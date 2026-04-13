@@ -19,7 +19,7 @@ const socketIoProxy = {
 
 export default defineConfig({
   plugins: [react()],
-  base: '/DRT_visualization_dashboard/',
+  base: '/',
   server: {
     host: true,
     port,
