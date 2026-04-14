@@ -16,7 +16,9 @@ interface SimulationControlsProps {
   onStart: () => void;
   onStop: () => void;
   onReset: () => void;
-  analysisMode: boolean;
+  canEnterAnalysis: boolean;
+  inAnalysisMode: boolean;
+  onEnterAnalysis: () => void;
   analysisVehicleId: number | null;
   analysisVehicleIds: number[];
   onSelectAnalysisVehicle: (id: number | null) => void;
@@ -127,7 +129,9 @@ export default function SimulationControls({
   onStart,
   onStop,
   onReset,
-  analysisMode,
+  canEnterAnalysis,
+  inAnalysisMode,
+  onEnterAnalysis,
   analysisVehicleId,
   analysisVehicleIds,
   onSelectAnalysisVehicle,
@@ -165,7 +169,7 @@ export default function SimulationControls({
     onSelectAnalysisVehicle(analysisVehicleId === id ? null : id);
   }, [analysisVehicleId, onSelectAnalysisVehicle]);
 
-  const showAnalysisVehicles = analysisMode && analysisVehicleIds.length > 0;
+  const showAnalysisVehicles = inAnalysisMode && analysisVehicleIds.length > 0;
 
   return (
     <div className="panel controls-panel">
@@ -176,7 +180,11 @@ export default function SimulationControls({
             <button type="button" className="btn btn-warning" onClick={onStop}>
               ⏸ Pause
             </button>
-          ) : analysisMode ? (
+          ) : canEnterAnalysis ? (
+            <button type="button" className="btn btn-analysis" onClick={onEnterAnalysis}>
+              Analysis Mode
+            </button>
+          ) : inAnalysisMode ? (
             <button type="button" className="btn btn-analysis" disabled aria-label="Analysis mode active">
               Analysis Mode
             </button>

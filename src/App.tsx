@@ -27,10 +27,12 @@ export default function App() {
     connectionStatus,
     reconnectAttempt,
     isRunning,
+    simFinished,
     speed,
     start,
     stop,
     reset: wsReset,
+    enterAnalysis,
   } = useWebSocketSimulation({ onFrameConsumed });
 
   const reset = useCallback(() => {
@@ -38,9 +40,19 @@ export default function App() {
     wsReset();
   }, [history.clearHistory, wsReset]);
 
-  const analysisActive =
-    !isRunning && history.hasHistory && history.analysisVehicleId != null;
-  const canAnalyse = !isRunning && history.hasHistory;
+  const handleEnterAnalysis = useCallback(() => {
+    enterAnalysis();
+    history.setReplayTime(0);
+  }, [enterAnalysis, history.setReplayTime]);
+
+  // Sim finished but user hasn't clicked "Enter Analysis Mode" yet
+  const canEnterAnalysis = simFinished && history.hasHistory;
+
+  // User has entered analysis mode (clicked the button)
+  const inAnalysisMode = !isRunning && !simFinished && history.hasHistory;
+
+  // User has entered analysis mode AND selected a vehicle
+  const analysisActive = inAnalysisMode && history.analysisVehicleId != null;
 
   const analysisVehicles = useMemo(() => {
     if (!analysisActive || !history.analysis?.currentVehicle) return state.vehicles;
@@ -91,7 +103,9 @@ export default function App() {
                 onStart={start}
                 onStop={stop}
                 onReset={reset}
-                analysisMode={canAnalyse}
+                canEnterAnalysis={canEnterAnalysis}
+                inAnalysisMode={inAnalysisMode}
+                onEnterAnalysis={handleEnterAnalysis}
                 analysisVehicleId={history.analysisVehicleId}
                 analysisVehicleIds={history.vehicleIds}
                 onSelectAnalysisVehicle={history.selectVehicle}
@@ -110,6 +124,10 @@ export default function App() {
                 analysisVehicleId={analysisActive ? history.analysisVehicleId : undefined}
                 routeEdges={analysisActive ? history.analysis?.routeEdges : undefined}
                 analysisPassengers={analysisActive ? history.analysis?.assignedPassengers : undefined}
+                edgeTraversals={analysisActive ? history.analysis?.edgeTraversals : undefined}
+                nodeActivity={analysisActive ? history.analysis?.nodeActivity : undefined}
+                analysisSummary={analysisActive ? history.analysis?.summary : undefined}
+                maxWaitTimeThreshold={state.maxWaitTime}
               />
             </section>
           </div>

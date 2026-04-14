@@ -309,14 +309,19 @@
   background: rgba(167, 139, 250, 0.18);
   color: #c4b5fd;
   border: 1px solid rgba(167, 139, 250, 0.35);
-  cursor: default;
+  cursor: pointer;
   letter-spacing: 0.03em;
+  transition: background 0.15s ease;
+}
+
+.btn-analysis:not(:disabled):hover {
+  background: rgba(167, 139, 250, 0.35);
 }
 
 .btn-analysis:disabled {
   cursor: not-allowed;
   pointer-events: none;
-  opacity: 1;
+  opacity: 0.7;
 }
 
 .control-group {
@@ -554,6 +559,105 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
+}
+
+.analysis-overlay {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  border-radius: 6px;
+  padding: 8px 10px;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+  max-width: 240px;
+  z-index: 2;
+}
+
+.analysis-overlay-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #c4b5fd;
+  margin-bottom: 6px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.analysis-overlay-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px 10px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stat-item-wide {
+  grid-column: span 3;
+}
+
+.stat-label {
+  font-size: 0.58rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.stat-value {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.stat-bar {
+  display: flex;
+  height: 6px;
+  width: 100%;
+  border-radius: 3px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.15);
+  margin-top: 2px;
+}
+
+.stat-bar-seg {
+  height: 100%;
+}
+
+.legend-bar {
+  width: 24px;
+  height: 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.legend-triangle-up {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 7px solid #f59e0b;
+  flex-shrink: 0;
+}
+
+.legend-triangle-down {
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #10b981;
+  flex-shrink: 0;
+}
+
+.legend-dash {
+  width: 18px;
+  height: 0;
+  border-top: 1.5px dashed #94a3b8;
+  flex-shrink: 0;
 }
 
 .network-svg {
@@ -601,6 +705,13 @@
   flex: 1;
   min-height: 0;
   width: 100%;
+}
+
+.chart-empty-text {
+  color: #64748b;
+  font-size: 12px;
+  text-align: center;
+  padding: 24px 0;
 }
 
 .chart-empty {
