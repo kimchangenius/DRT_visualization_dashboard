@@ -530,10 +530,12 @@ export default function NetworkMap({
           {/* Vehicles */}
           {vehicles.map(v => {
             const pos = getVehiclePosition(v);
-            const dimmed = inAnalysis && v.id !== analysisVehicleId;
+            const hidden = inAnalysis && analysisVehicleId != null && v.id !== analysisVehicleId;
+            const dimmed = inAnalysis && analysisVehicleId == null && false; // reserved
             const isAnalysisVehicle = inAnalysis && v.id === analysisVehicleId;
+            if (hidden) return null;
             return (
-              <g key={`vehicle-${v.id}`} opacity={dimmed ? 0.12 : 1}>
+              <g key={`vehicle-${v.id}`} opacity={1}>
                 {isAnalysisVehicle && (
                   <circle
                     cx={pos.x} cy={pos.y} r={8}

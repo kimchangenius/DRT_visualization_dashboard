@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Passenger, Vehicle } from '../types/simulation';
+import { useCallback } from 'react';
+import type { Vehicle, Passenger } from '../types/simulation';
 
 interface SimulationControlsProps {
   isRunning: boolean;
@@ -11,8 +11,6 @@ interface SimulationControlsProps {
   hiddenDim: number;
   batchSize: number;
   learningRate: number;
-  vehicles: Vehicle[];
-  passengers: Passenger[];
   onStart: () => void;
   onStop: () => void;
   onReset: () => void;
@@ -22,6 +20,8 @@ interface SimulationControlsProps {
   analysisVehicleId: number | null;
   analysisVehicleIds: number[];
   onSelectAnalysisVehicle: (id: number | null) => void;
+  analysisCurrentVehicle?: Vehicle | null;
+  analysisPassengers?: Passenger[];
   replayTime: number;
   onReplayTimeChange: (t: number) => void;
   isReplaying: boolean;
@@ -41,37 +41,20 @@ function fmtLearningRate(x: number): string {
     .replace(/e\+(?=\d)/, 'e');
 }
 
-function acceptedRequestsForVehicle(vehicleId: number, passengers: Passenger[]): Passenger[] {
-  return passengers.filter(
-    p =>
-      p.assignedVehicleId === vehicleId &&
-      (p.status === 'waiting' || p.status === 'picked_up'),
-  );
-}
-
-function passengerById(passengers: Passenger[], id: number | null): Passenger | undefined {
-  if (id == null) return undefined;
-  return passengers.find(p => p.id === id);
-}
-
 function requestSummary(p: Passenger): string {
   return `#${p.id} ${p.originNodeId}→${p.destinationNodeId} · ${p.status} · req_t=${p.requestTime}`;
 }
 
 function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passengers: Passenger[] }) {
-  const accepted = acceptedRequestsForVehicle(vehicle.id, passengers);
-  const onboard = passengerById(passengers, vehicle.passengerId);
+  const accepted = passengers.filter(
+    p => p.assignedVehicleId === vehicle.id && (p.status === 'waiting' || p.status === 'picked_up'),
+  );
+  const onboard = passengers.find(p => p.id === vehicle.passengerId) ?? null;
   const lines: Passenger[] = [];
   const seen = new Set<number>();
-  if (onboard) {
-    lines.push(onboard);
-    seen.add(onboard.id);
-  }
+  if (onboard) { lines.push(onboard); seen.add(onboard.id); }
   for (const p of accepted) {
-    if (!seen.has(p.id)) {
-      lines.push(p);
-      seen.add(p.id);
-    }
+    if (!seen.has(p.id)) { lines.push(p); seen.add(p.id); }
   }
 
   return (
@@ -82,9 +65,9 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
           <dt>curr_node</dt>
           <dd>
             {vehicle.currentNodeId}
-            {vehicle.targetNodeId != null ? (
+            {vehicle.targetNodeId != null && (
               <span className="control-vehicle-status-sub"> → target {vehicle.targetNodeId}</span>
-            ) : null}
+            )}
           </dd>
         </div>
         <div className="control-vehicle-status-row">
@@ -98,9 +81,7 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
               <span className="control-vehicle-status-empty">—</span>
             ) : (
               <ul className="control-vehicle-request-list">
-                {lines.map(p => (
-                  <li key={p.id}>{requestSummary(p)}</li>
-                ))}
+                {lines.map(p => <li key={p.id}>{requestSummary(p)}</li>)}
               </ul>
             )}
           </dd>
@@ -124,8 +105,6 @@ export default function SimulationControls({
   hiddenDim,
   batchSize,
   learningRate,
-  vehicles,
-  passengers,
   onStart,
   onStop,
   onReset,
@@ -135,36 +114,14 @@ export default function SimulationControls({
   analysisVehicleId,
   analysisVehicleIds,
   onSelectAnalysisVehicle,
+  analysisCurrentVehicle,
+  analysisPassengers = [],
   replayTime,
   onReplayTimeChange,
   isReplaying,
   onToggleReplay,
   timeRange,
 }: SimulationControlsProps) {
-  const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
-
-  const toggleVehicleSelection = useCallback((id: number) => {
-    setSelectedVehicleIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
-  }, []);
-
-  const vehicleById = useMemo(() => {
-    const m = new Map<number, Vehicle>();
-    for (const v of vehicles) m.set(v.id, v);
-    return m;
-  }, [vehicles]);
-
-  useEffect(() => {
-    const ids = new Set(vehicles.map(v => v.id));
-    setSelectedVehicleIds(prev => prev.filter(id => ids.has(id)));
-  }, [vehicles]);
-
-  const selectedPanels = useMemo(
-    () => selectedVehicleIds.map(id => ({ id, vehicle: vehicleById.get(id) })),
-    [selectedVehicleIds, vehicleById],
-  );
-
-  const vehicleButtonsDisabled = vehicles.length === 0;
-
   const handleAnalysisVehicleClick = useCallback((id: number) => {
     onSelectAnalysisVehicle(analysisVehicleId === id ? null : id);
   }, [analysisVehicleId, onSelectAnalysisVehicle]);
@@ -180,19 +137,20 @@ export default function SimulationControls({
             <button type="button" className="btn btn-warning" onClick={onStop}>
               ⏸ Pause
             </button>
-          ) : canEnterAnalysis ? (
-            <button type="button" className="btn btn-analysis" onClick={onEnterAnalysis}>
-              Analysis Mode
-            </button>
-          ) : inAnalysisMode ? (
-            <button type="button" className="btn btn-analysis" disabled aria-label="Analysis mode active">
-              Analysis Mode
-            </button>
           ) : (
             <button type="button" className="btn btn-primary" onClick={onStart}>
               ▶ Start
             </button>
           )}
+          <button
+            type="button"
+            className="btn btn-analysis"
+            onClick={onEnterAnalysis}
+            disabled={!canEnterAnalysis}
+            aria-label={inAnalysisMode ? 'Analysis mode active' : 'Enter analysis mode'}
+          >
+            Analysis
+          </button>
           <button type="button" className="btn btn-danger" onClick={onReset}>
             ↺ Reset
           </button>
@@ -256,11 +214,12 @@ export default function SimulationControls({
               >
                 {analysisVehicleIds.map(id => {
                   const selected = analysisVehicleId === id;
+                  const faded = analysisVehicleId !== null && !selected;
                   return (
                     <button
                       key={id}
                       type="button"
-                      className={`control-vehicle-chip${selected ? ' is-analysis-selected' : ''}`}
+                      className={`control-vehicle-chip${selected ? ' is-analysis-selected' : ''}${faded ? ' is-analysis-faded' : ''}`}
                       onClick={() => handleAnalysisVehicleClick(id)}
                       title={selected ? 'Click to exit analysis' : 'Click to analyze this vehicle'}
                     >
@@ -269,6 +228,12 @@ export default function SimulationControls({
                   );
                 })}
               </div>
+
+              {analysisVehicleId !== null && analysisCurrentVehicle && (
+                <div className="control-vehicle-status-list">
+                  <VehicleStatusCard vehicle={analysisCurrentVehicle} passengers={analysisPassengers} />
+                </div>
+              )}
 
               {analysisVehicleId !== null && (
                 <div className="replay-controls">
@@ -301,49 +266,7 @@ export default function SimulationControls({
                 </div>
               )}
             </div>
-          ) : (
-            <div className="control-vehicles">
-              <div className="control-vehicles-title">Vehicles Information</div>
-              {vehicles.length === 0 ? (
-                <p className="control-vehicles-hint">The list of vehicles running in the simulation is displayed here.</p>
-              ) : (
-                <div
-                  className="control-vehicle-buttons"
-                  role="group"
-                  aria-label="Vehicle status panels"
-                >
-                  {vehicles.map(v => {
-                    const selected = selectedVehicleIds.includes(v.id);
-                    return (
-                      <button
-                        key={v.id}
-                        type="button"
-                        className={`control-vehicle-chip${selected ? ' is-selected' : ''}`}
-                        onClick={() => toggleVehicleSelection(v.id)}
-                        disabled={vehicleButtonsDisabled}
-                        title={
-                          vehicleButtonsDisabled
-                            ? 'No vehicle data'
-                            : selected
-                              ? 'Click to close panel'
-                              : 'Click to add status panel'
-                        }
-                      >
-                        V{v.id}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {selectedPanels.length > 0 ? (
-                <div className="control-vehicle-status-list">
-                  {selectedPanels.map(({ id, vehicle }) =>
-                    vehicle && <VehicleStatusCard key={id} vehicle={vehicle} passengers={passengers} />
-                  )}
-                </div>
-              ) : null}
-            </div>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
