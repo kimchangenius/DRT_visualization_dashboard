@@ -46,6 +46,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
+  const [simFinished, setSimFinished] = useState(false);
   const [speed, setSpeedState] = useState(1);
 
   const bufferRef = useRef<SimulationState[]>([]);
@@ -91,6 +92,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
       flushBuffer();
       setState(SIMULATION_INITIAL_STATE);
       setIsRunning(false);
+      setSimFinished(false);
       setConnectionStatus('connected');
       setReconnectAttempt(0);
     });
@@ -100,6 +102,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
       flushBuffer();
       setState(SIMULATION_INITIAL_STATE);
       setIsRunning(false);
+      setSimFinished(false);
       setConnectionStatus('disconnected');
     });
 
@@ -143,6 +146,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
       }
       bufferRef.current = [];
       setIsRunning(false);
+      setSimFinished(true);
     });
 
     return () => {
@@ -156,10 +160,15 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     socketRef.current?.emit('command', { type, payload });
   }, []);
 
+  const enterAnalysis = useCallback(() => {
+    setSimFinished(false);
+  }, []);
+
   const start = useCallback(() => {
     applyServerStateRef.current = true;
     sendCommand('start');
     setIsRunning(true);
+    setSimFinished(false);
     startPlayback();
   }, [sendCommand, startPlayback]);
 
@@ -192,6 +201,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     }));
     sendCommand('reset');
     setIsRunning(false);
+    setSimFinished(false);
   }, [sendCommand, flushBuffer]);
 
   const setSpeed = useCallback((newSpeed: number) => {
@@ -205,10 +215,12 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     connectionStatus,
     reconnectAttempt,
     isRunning,
+    simFinished,
     speed,
     start,
     stop,
     reset,
+    enterAnalysis,
     setSpeed,
   };
 }

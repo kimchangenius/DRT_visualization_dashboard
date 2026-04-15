@@ -113,3 +113,62 @@ export interface SimulationConfig {
   speed: number;
   demandRate: number;
 }
+
+export interface WaitTimeBarDatum {
+  passengerId: number;
+  waitTime: number;
+  requestTime: number;
+}
+
+export interface DetourFactorDatum {
+  passengerId: number;
+  detourFactor: number;
+  actualTravelTime: number;
+  directTravelTime: number;
+}
+
+export interface EfficiencyDatum {
+  time: number;
+  idlePct: number;
+  pickupPct: number;
+  carryingPct: number;
+}
+
+export interface EdgeTraversal {
+  from: number;
+  to: number;
+  count: number;
+}
+
+export interface NodeActivity {
+  nodeId: number;
+  pickupCount: number;
+  dropoffCount: number;
+}
+
+export interface VehicleAnalysisSummary {
+  totalDistance: number;
+  totalTrips: number;
+  servedPassengers: number;
+  cancelledPassengers: number;
+  avgWaitTime: number;
+  avgDetourFactor: number;
+  maxWaitTime: number;
+  idlePct: number;
+  pickupPct: number;
+  carryingPct: number;
+}
+
+export interface VehicleAnalysis {
+  vehicleId: number;
+  metrics: SimulationMetrics;
+  currentVehicle: Vehicle | null;
+  assignedPassengers: Passenger[];
+  routeEdges: [number, number][];
+  edgeTraversals: EdgeTraversal[];
+  nodeActivity: NodeActivity[];
+  summary: VehicleAnalysisSummary;
+  waitTimeData: WaitTimeBarDatum[];
+  detourFactorData: DetourFactorDatum[];
+  efficiencyData: EfficiencyDatum[];
+}
