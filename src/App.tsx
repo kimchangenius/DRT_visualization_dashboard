@@ -116,6 +116,10 @@ export default function App() {
                 isReplaying={history.isReplaying}
                 onToggleReplay={history.toggleReplay}
                 timeRange={history.timeRange}
+                vehicles={state.vehicles}
+                passengers={state.passengers}
+                analysisSummary={analysisActive ? history.analysis?.summary : undefined}
+                maxWaitTimeThreshold={state.maxWaitTime}
               />
             </aside>
 
@@ -128,7 +132,6 @@ export default function App() {
                 analysisPassengers={analysisActive ? history.analysis?.assignedPassengers : undefined}
                 edgeTraversals={analysisActive ? history.analysis?.edgeTraversals : undefined}
                 nodeActivity={analysisActive ? history.analysis?.nodeActivity : undefined}
-                analysisSummary={analysisActive ? history.analysis?.summary : undefined}
                 maxWaitTimeThreshold={state.maxWaitTime}
               />
             </section>

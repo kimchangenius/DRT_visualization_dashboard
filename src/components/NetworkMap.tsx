@@ -5,7 +5,6 @@ import type {
   Passenger,
   EdgeTraversal,
   NodeActivity,
-  VehicleAnalysisSummary,
 } from '../types/simulation';
 
 interface NetworkMapProps {
@@ -16,7 +15,6 @@ interface NetworkMapProps {
   analysisPassengers?: Passenger[];
   edgeTraversals?: EdgeTraversal[];
   nodeActivity?: NodeActivity[];
-  analysisSummary?: VehicleAnalysisSummary;
   maxWaitTimeThreshold?: number;
 }
 
@@ -178,7 +176,6 @@ export default function NetworkMap({
   analysisPassengers,
   edgeTraversals,
   nodeActivity,
-  analysisSummary,
   maxWaitTimeThreshold = 10,
 }: NetworkMapProps) {
   const inAnalysis = analysisVehicleId != null;
@@ -584,74 +581,6 @@ export default function NetworkMap({
             );
           })}
         </svg>
-
-        {inAnalysis && analysisSummary && (
-          <div className="analysis-overlay">
-            <div className="analysis-overlay-title">Vehicle V{analysisVehicleId} Summary</div>
-            <div className="analysis-overlay-grid">
-              <div className="stat-item">
-                <span className="stat-label">Served</span>
-                <span className="stat-value">{analysisSummary.servedPassengers}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">Trips</span>
-                <span className="stat-value">{analysisSummary.totalTrips}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">Distance</span>
-                <span className="stat-value">{analysisSummary.totalDistance.toFixed(1)}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">Avg Wait</span>
-                <span className="stat-value">{analysisSummary.avgWaitTime.toFixed(1)}</span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">Max Wait</span>
-                <span
-                  className="stat-value"
-                  style={{
-                    color: waitSeverityColor(analysisSummary.maxWaitTime, maxWaitTimeThreshold),
-                  }}
-                >
-                  {analysisSummary.maxWaitTime.toFixed(1)}
-                </span>
-              </div>
-              <div className="stat-item">
-                <span className="stat-label">Avg Detour</span>
-                <span className="stat-value">×{analysisSummary.avgDetourFactor.toFixed(2)}</span>
-              </div>
-              <div className="stat-item stat-item-wide">
-                <span className="stat-label">Status Share</span>
-                <div className="stat-bar">
-                  <div
-                    className="stat-bar-seg"
-                    style={{
-                      width: `${analysisSummary.idlePct}%`,
-                      background: '#3b82f6',
-                    }}
-                    title={`Idle ${analysisSummary.idlePct}%`}
-                  />
-                  <div
-                    className="stat-bar-seg"
-                    style={{
-                      width: `${analysisSummary.pickupPct}%`,
-                      background: '#f59e0b',
-                    }}
-                    title={`Pickup ${analysisSummary.pickupPct}%`}
-                  />
-                  <div
-                    className="stat-bar-seg"
-                    style={{
-                      width: `${analysisSummary.carryingPct}%`,
-                      background: '#10b981',
-                    }}
-                    title={`Carrying ${analysisSummary.carryingPct}%`}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
 
         <div className="map-legend">
           {inAnalysis ? (

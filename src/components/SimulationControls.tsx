@@ -1,5 +1,5 @@
-import { useCallback } from 'react';
-import type { Vehicle, Passenger } from '../types/simulation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { Vehicle, Passenger, VehicleAnalysisSummary } from '../types/simulation';
 
 interface SimulationControlsProps {
   isRunning: boolean;
@@ -27,6 +27,10 @@ interface SimulationControlsProps {
   isReplaying: boolean;
   onToggleReplay: () => void;
   timeRange: { min: number; max: number };
+  vehicles: Vehicle[];
+  passengers: Passenger[];
+  analysisSummary?: VehicleAnalysisSummary;
+  maxWaitTimeThreshold?: number;
 }
 
 function fmtInt(n: number): string {
@@ -41,20 +45,37 @@ function fmtLearningRate(x: number): string {
     .replace(/e\+(?=\d)/, 'e');
 }
 
+function acceptedRequestsForVehicle(vehicleId: number, passengers: Passenger[]): Passenger[] {
+  return passengers.filter(
+    p =>
+      p.assignedVehicleId === vehicleId &&
+      (p.status === 'waiting' || p.status === 'picked_up'),
+  );
+}
+
+function passengerById(passengers: Passenger[], id: number | null): Passenger | undefined {
+  if (id == null) return undefined;
+  return passengers.find(p => p.id === id);
+}
+
 function requestSummary(p: Passenger): string {
   return `#${p.id} ${p.originNodeId}→${p.destinationNodeId} · ${p.status} · req_t=${p.requestTime}`;
 }
 
 function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passengers: Passenger[] }) {
-  const accepted = passengers.filter(
-    p => p.assignedVehicleId === vehicle.id && (p.status === 'waiting' || p.status === 'picked_up'),
-  );
-  const onboard = passengers.find(p => p.id === vehicle.passengerId) ?? null;
+  const accepted = acceptedRequestsForVehicle(vehicle.id, passengers);
+  const onboard = passengerById(passengers, vehicle.passengerId);
   const lines: Passenger[] = [];
   const seen = new Set<number>();
-  if (onboard) { lines.push(onboard); seen.add(onboard.id); }
+  if (onboard) {
+    lines.push(onboard);
+    seen.add(onboard.id);
+  }
   for (const p of accepted) {
-    if (!seen.has(p.id)) { lines.push(p); seen.add(p.id); }
+    if (!seen.has(p.id)) {
+      lines.push(p);
+      seen.add(p.id);
+    }
   }
 
   return (
@@ -65,9 +86,9 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
           <dt>curr_node</dt>
           <dd>
             {vehicle.currentNodeId}
-            {vehicle.targetNodeId != null && (
+            {vehicle.targetNodeId != null ? (
               <span className="control-vehicle-status-sub"> → target {vehicle.targetNodeId}</span>
-            )}
+            ) : null}
           </dd>
         </div>
         <div className="control-vehicle-status-row">
@@ -81,7 +102,9 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
               <span className="control-vehicle-status-empty">—</span>
             ) : (
               <ul className="control-vehicle-request-list">
-                {lines.map(p => <li key={p.id}>{requestSummary(p)}</li>)}
+                {lines.map(p => (
+                  <li key={p.id}>{requestSummary(p)}</li>
+                ))}
               </ul>
             )}
           </dd>
@@ -89,6 +112,14 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
       </dl>
     </div>
   );
+}
+
+function waitSeverityColor(waitTime: number, threshold: number): string {
+  if (threshold <= 0) return '#f59e0b';
+  const r = Math.max(0, Math.min(1, waitTime / threshold));
+  if (r < 0.5) return '#10b981';
+  if (r < 0.85) return '#f59e0b';
+  return '#ef4444';
 }
 
 function formatSimTime(t: number): string {
@@ -121,7 +152,35 @@ export default function SimulationControls({
   isReplaying,
   onToggleReplay,
   timeRange,
+  vehicles,
+  passengers,
+  analysisSummary,
+  maxWaitTimeThreshold = 10,
 }: SimulationControlsProps) {
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
+
+  const toggleVehicleSelection = useCallback((id: number) => {
+    setSelectedVehicleIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  }, []);
+
+  const vehicleById = useMemo(() => {
+    const m = new Map<number, Vehicle>();
+    for (const v of vehicles) m.set(v.id, v);
+    return m;
+  }, [vehicles]);
+
+  useEffect(() => {
+    const ids = new Set(vehicles.map(v => v.id));
+    setSelectedVehicleIds(prev => prev.filter(id => ids.has(id)));
+  }, [vehicles]);
+
+  const selectedPanels = useMemo(
+    () => selectedVehicleIds.map(id => ({ id, vehicle: vehicleById.get(id) })),
+    [selectedVehicleIds, vehicleById],
+  );
+
+  const vehicleButtonsDisabled = vehicles.length === 0;
+
   const handleAnalysisVehicleClick = useCallback((id: number) => {
     onSelectAnalysisVehicle(analysisVehicleId === id ? null : id);
   }, [analysisVehicleId, onSelectAnalysisVehicle]);
@@ -229,9 +288,76 @@ export default function SimulationControls({
                 })}
               </div>
 
-              {analysisVehicleId !== null && analysisCurrentVehicle && (
-                <div className="control-vehicle-status-list">
-                  <VehicleStatusCard vehicle={analysisCurrentVehicle} passengers={analysisPassengers} />
+              {analysisVehicleId !== null && analysisSummary && (
+                <div className="analysis-summary-card">
+                  <div className="analysis-summary-title">Vehicle V{analysisVehicleId} Summary</div>
+                  <div className="analysis-summary-grid">
+                    <div className="stat-item">
+                      <span className="stat-label">Served</span>
+                      <span className="stat-value">{analysisSummary.servedPassengers}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Trips</span>
+                      <span className="stat-value">{analysisSummary.totalTrips}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Distance</span>
+                      <span className="stat-value">{analysisSummary.totalDistance.toFixed(1)}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Avg Wait</span>
+                      <span className="stat-value">{analysisSummary.avgWaitTime.toFixed(1)}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Max Wait</span>
+                      <span
+                        className="stat-value"
+                        style={{
+                          color: waitSeverityColor(analysisSummary.maxWaitTime, maxWaitTimeThreshold),
+                        }}
+                      >
+                        {analysisSummary.maxWaitTime.toFixed(1)}
+                      </span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Avg Detour</span>
+                      <span className="stat-value">×{analysisSummary.avgDetourFactor.toFixed(2)}</span>
+                    </div>
+                    <div className="stat-item stat-item-wide">
+                      <span className="stat-label">Status Share</span>
+                      <div className="stat-bar">
+                        <div
+                          className="stat-bar-seg"
+                          style={{ width: `${analysisSummary.idlePct}%`, background: '#3b82f6' }}
+                          title={`Idle ${analysisSummary.idlePct}%`}
+                        />
+                        <div
+                          className="stat-bar-seg"
+                          style={{ width: `${analysisSummary.pickupPct}%`, background: '#f59e0b' }}
+                          title={`Pickup ${analysisSummary.pickupPct}%`}
+                        />
+                        <div
+                          className="stat-bar-seg"
+                          style={{ width: `${analysisSummary.carryingPct}%`, background: '#10b981' }}
+                          title={`Carrying ${analysisSummary.carryingPct}%`}
+                        />
+                      </div>
+                      <div className="stat-bar-legend">
+                        <span className="stat-bar-legend-item">
+                          <span className="stat-bar-legend-dot" style={{ background: '#3b82f6' }} />
+                          Idle {analysisSummary.idlePct}%
+                        </span>
+                        <span className="stat-bar-legend-item">
+                          <span className="stat-bar-legend-dot" style={{ background: '#f59e0b' }} />
+                          Pickup {analysisSummary.pickupPct}%
+                        </span>
+                        <span className="stat-bar-legend-item">
+                          <span className="stat-bar-legend-dot" style={{ background: '#10b981' }} />
+                          Carrying {analysisSummary.carryingPct}%
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -266,7 +392,49 @@ export default function SimulationControls({
                 </div>
               )}
             </div>
-          ) : null}
+          ) : (
+            <div className="control-vehicles">
+              <div className="control-vehicles-title">Vehicles Information</div>
+              {vehicles.length === 0 ? (
+                <p className="control-vehicles-hint">The list of vehicles running in the simulation is displayed here.</p>
+              ) : (
+                <div
+                  className="control-vehicle-buttons"
+                  role="group"
+                  aria-label="Vehicle status panels"
+                >
+                  {vehicles.map(v => {
+                    const selected = selectedVehicleIds.includes(v.id);
+                    return (
+                      <button
+                        key={v.id}
+                        type="button"
+                        className={`control-vehicle-chip${selected ? ' is-selected' : ''}`}
+                        onClick={() => toggleVehicleSelection(v.id)}
+                        disabled={vehicleButtonsDisabled}
+                        title={
+                          vehicleButtonsDisabled
+                            ? 'No vehicle data'
+                            : selected
+                              ? 'Click to close panel'
+                              : 'Click to add status panel'
+                        }
+                      >
+                        V{v.id}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {selectedPanels.length > 0 ? (
+                <div className="control-vehicle-status-list">
+                  {selectedPanels.map(({ id, vehicle }) =>
+                    vehicle && <VehicleStatusCard key={id} vehicle={vehicle} passengers={passengers} />
+                  )}
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
     </div>
