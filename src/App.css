@@ -352,6 +352,11 @@
   border-top: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.2));
 }
 
+.control-config.in-analysis {
+  border-top: none;
+  padding-top: 0;
+}
+
 .control-config-title {
   font-size: 0.65rem;
   font-weight: 600;
@@ -581,6 +586,25 @@
   color: #c4b5fd;
   margin-bottom: 10px;
   letter-spacing: 0.3px;
+}
+
+.analysis-section {
+  margin-bottom: 10px;
+}
+
+.analysis-section:last-child {
+  margin-bottom: 0;
+}
+
+.analysis-section-title {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.2);
 }
 
 .analysis-summary-grid {

@@ -157,12 +157,16 @@ export interface VehicleAnalysisSummary {
   idlePct: number;
   pickupPct: number;
   carryingPct: number;
+  serviceRate: number;
+  distancePerTrip: number;
 }
 
 export interface VehicleAnalysis {
   vehicleId: number;
   metrics: SimulationMetrics;
   currentVehicle: Vehicle | null;
+  replayVehicles: Vehicle[];
+  replayPassengers: Passenger[];
   assignedPassengers: Passenger[];
   routeEdges: [number, number][];
   edgeTraversals: EdgeTraversal[];

@@ -193,12 +193,10 @@ export function useSimulationHistory() {
 
       const total = statusCounts.idle + statusCounts.picking_up + statusCounts.carrying;
       if (total > 0) {
-        efficiencyData.push({
-          time: t,
-          idlePct: Math.round((statusCounts.idle / total) * 100),
-          pickupPct: Math.round((statusCounts.picking_up / total) * 100),
-          carryingPct: Math.round((statusCounts.carrying / total) * 100),
-        });
+        const idlePct = Math.round((statusCounts.idle / total) * 100);
+        const pickupPct = Math.round((statusCounts.picking_up / total) * 100);
+        const carryingPct = 100 - idlePct - pickupPct;
+        efficiencyData.push({ time: t, idlePct, pickupPct, carryingPct });
       }
     }
 
@@ -213,10 +211,14 @@ export function useSimulationHistory() {
     }
     const metrics: SimulationMetrics = metricsFrame.metrics;
 
-    // --- Current vehicle at replay time ---
+    // --- Vehicles & passengers snapshot at replay time ---
+    let replayVehicles: Vehicle[] = lastFrame.vehicles;
+    let replayPassengers: Passenger[] = lastFrame.passengers;
     let currentVehicle: Vehicle | null = null;
     for (const frame of frames) {
       if (frame.metrics.currentTime <= replayTime) {
+        replayVehicles = frame.vehicles;
+        replayPassengers = frame.passengers;
         currentVehicle = frame.vehicles.find(veh => veh.id === vid) ?? null;
       } else {
         break;
@@ -236,9 +238,12 @@ export function useSimulationHistory() {
       ? detours.reduce((a, b) => a + b, 0) / detours.length
       : 0;
     const lastEff = efficiencyData[efficiencyData.length - 1];
+    const totalDistance = currentVehicle?.totalDistance ?? lastFrame.vehicles.find(v => v.id === vid)?.totalDistance ?? 0;
+    const totalTrips = currentVehicle?.totalTrips ?? lastFrame.vehicles.find(v => v.id === vid)?.totalTrips ?? 0;
+    const totalAssigned = servedPassengers + cancelledPassengers;
     const summary: VehicleAnalysisSummary = {
-      totalDistance: currentVehicle?.totalDistance ?? lastFrame.vehicles.find(v => v.id === vid)?.totalDistance ?? 0,
-      totalTrips: currentVehicle?.totalTrips ?? lastFrame.vehicles.find(v => v.id === vid)?.totalTrips ?? 0,
+      totalDistance,
+      totalTrips,
       servedPassengers,
       cancelledPassengers,
       avgWaitTime: Math.round(avgWaitTime * 10) / 10,
@@ -247,12 +252,16 @@ export function useSimulationHistory() {
       idlePct: lastEff?.idlePct ?? 0,
       pickupPct: lastEff?.pickupPct ?? 0,
       carryingPct: lastEff?.carryingPct ?? 0,
+      serviceRate: totalAssigned > 0 ? Math.round((servedPassengers / totalAssigned) * 1000) / 10 : 0,
+      distancePerTrip: totalTrips > 0 ? Math.round((totalDistance / totalTrips) * 10) / 10 : 0,
     };
 
     return {
       vehicleId: vid,
       metrics,
       currentVehicle,
+      replayVehicles,
+      replayPassengers,
       assignedPassengers,
       routeEdges,
       edgeTraversals,

@@ -4,17 +4,15 @@ import type {
   Vehicle,
   Passenger,
   EdgeTraversal,
-  NodeActivity,
+  // NodeActivity,  // Activity ring – disabled
 } from '../types/simulation';
 
 interface NetworkMapProps {
   vehicles: Vehicle[];
   passengers: Passenger[];
   analysisVehicleId?: number | null;
-  routeEdges?: [number, number][];
-  analysisPassengers?: Passenger[];
   edgeTraversals?: EdgeTraversal[];
-  nodeActivity?: NodeActivity[];
+  // nodeActivity?: NodeActivity[];  // Activity ring – disabled
   maxWaitTimeThreshold?: number;
 }
 
@@ -141,27 +139,14 @@ function getVehiclePosition(v: Vehicle) {
   return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
 }
 
-// Heatmap color gradient for traversal count: blue -> yellow -> red
-function heatColor(ratio: number): string {
-  const r = Math.max(0, Math.min(1, ratio));
-  // Gradient stops: 0 -> #60a5fa (blue), 0.5 -> #facc15 (yellow), 1 -> #ef4444 (red)
-  const lerp = (a: number, b: number, t: number) => Math.round(a + (b - a) * t);
-  if (r < 0.5) {
-    const t = r / 0.5;
-    return `rgb(${lerp(96, 250, t)}, ${lerp(165, 204, t)}, ${lerp(250, 21, t)})`;
-  }
-  const t = (r - 0.5) / 0.5;
-  return `rgb(${lerp(250, 239, t)}, ${lerp(204, 68, t)}, ${lerp(21, 68, t)})`;
-}
-
-// Color by wait-time severity vs threshold (0..1)
-function waitSeverityColor(waitTime: number, threshold: number): string {
-  if (threshold <= 0) return '#f59e0b';
-  const r = Math.max(0, Math.min(1, waitTime / threshold));
-  if (r < 0.5) return '#10b981'; // green (safe)
-  if (r < 0.85) return '#f59e0b'; // amber (caution)
-  return '#ef4444'; // red (exceeded)
-}
+// // Color by wait-time severity vs threshold (0..1) – disabled
+// function waitSeverityColor(waitTime: number, threshold: number): string {
+//   if (threshold <= 0) return '#f59e0b';
+//   const r = Math.max(0, Math.min(1, waitTime / threshold));
+//   if (r < 0.5) return '#10b981';
+//   if (r < 0.85) return '#f59e0b';
+//   return '#ef4444';
+// }
 
 const ROUTE_TRACE_COLOR = '#a78bfa';
 const PICKUP_COLOR = '#f59e0b';
@@ -172,125 +157,87 @@ export default function NetworkMap({
   vehicles,
   passengers,
   analysisVehicleId,
-  routeEdges,
-  analysisPassengers,
   edgeTraversals,
-  nodeActivity,
+  // nodeActivity,  // Activity ring – disabled
   maxWaitTimeThreshold = 10,
 }: NetworkMapProps) {
   const inAnalysis = analysisVehicleId != null;
 
   const waitingByNode = new Map<number, number>();
-  if (!inAnalysis) {
-    for (const p of passengers) {
-      if (p.status === 'waiting') {
-        waitingByNode.set(p.originNodeId, (waitingByNode.get(p.originNodeId) || 0) + 1);
-      }
+  for (const p of passengers) {
+    if (p.status === 'waiting') {
+      waitingByNode.set(p.originNodeId, (waitingByNode.get(p.originNodeId) || 0) + 1);
     }
   }
 
-  const movingLinkColors = useMemo(() => buildMovingLinkColors(vehicles), [vehicles]);
-
-  const routeEdgeKeys = useMemo(() => {
-    if (!routeEdges) return new Set<string>();
-    return new Set(routeEdges.map(([a, b]) => normalizeEdgeKey(a, b)));
-  }, [routeEdges]);
-
-  // Map undirected edge key -> {count, dirs: [[a,b], ...]}
-  const edgeHeatmap = useMemo(() => {
-    const m = new Map<string, { count: number; dirs: [number, number][] }>();
-    if (!edgeTraversals) return { map: m, maxCount: 0 };
-    let maxCount = 0;
-    for (const e of edgeTraversals) {
-      const key = normalizeEdgeKey(e.from, e.to);
-      const entry = m.get(key) ?? { count: 0, dirs: [] };
-      entry.count += e.count;
-      entry.dirs.push([e.from, e.to]);
-      m.set(key, entry);
-      if (entry.count > maxCount) maxCount = entry.count;
+  const movingLinkColors = useMemo(() => {
+    if (inAnalysis) {
+      const selected = vehicles.filter(v => v.id === analysisVehicleId);
+      return buildMovingLinkColors(selected);
     }
-    return { map: m, maxCount };
-  }, [edgeTraversals]);
+    return buildMovingLinkColors(vehicles);
+  }, [vehicles, inAnalysis, analysisVehicleId]);
 
-  // Node activity lookup
-  const nodeActivityById = useMemo(() => {
-    const m = new Map<number, NodeActivity>();
-    if (!nodeActivity) return m;
-    for (const a of nodeActivity) m.set(a.nodeId, a);
-    return m;
-  }, [nodeActivity]);
+  // // Node activity lookup (Activity ring – disabled)
+  // const nodeActivityById = useMemo(() => {
+  //   const m = new Map<number, NodeActivity>();
+  //   if (!nodeActivity) return m;
+  //   for (const a of nodeActivity) m.set(a.nodeId, a);
+  //   return m;
+  // }, [nodeActivity]);
+  //
+  // const maxNodeActivity = useMemo(() => {
+  //   if (!nodeActivity || nodeActivity.length === 0) return 0;
+  //   return Math.max(
+  //     ...nodeActivity.map(a => a.pickupCount + a.dropoffCount),
+  //   );
+  // }, [nodeActivity]);
 
-  const maxNodeActivity = useMemo(() => {
-    if (!nodeActivity || nodeActivity.length === 0) return 0;
-    return Math.max(
-      ...nodeActivity.map(a => a.pickupCount + a.dropoffCount),
-    );
-  }, [nodeActivity]);
-
-  // Build passenger pickup/dropoff markers with rich info (passenger list per node)
-  type PassengerMarker = {
-    x: number;
-    y: number;
-    nodeId: number;
-    type: 'pickup' | 'dropoff';
-    passengerIds: number[];
-    maxWait: number;
+  type PerPassengerMarker = {
+    id: number;
+    status: string;
+    ox: number; oy: number;
+    dx: number; dy: number;
+    originColor: string;
+    hasDest: boolean;
+    destColor: string;
   };
-  const passengerMarkers = useMemo<PassengerMarker[]>(() => {
-    if (!inAnalysis || !analysisPassengers) return [];
-    const pickupByNode = new Map<number, PassengerMarker>();
-    const dropoffByNode = new Map<number, PassengerMarker>();
-    for (const p of analysisPassengers) {
-      const waitTime = p.pickupTime != null ? p.pickupTime - p.requestTime : 0;
+  const perPassengerMarkers = useMemo<PerPassengerMarker[]>(() => {
+    if (!inAnalysis) return [];
+    const markers: PerPassengerMarker[] = [];
+    for (const p of passengers) {
       const oNode = nodeById.get(p.originNodeId);
       const dNode = nodeById.get(p.destinationNodeId);
-      if (oNode) {
-        const existing = pickupByNode.get(p.originNodeId);
-        if (existing) {
-          existing.passengerIds.push(p.id);
-          existing.maxWait = Math.max(existing.maxWait, waitTime);
-        } else {
-          pickupByNode.set(p.originNodeId, {
-            x: oNode.x,
-            y: oNode.y,
-            nodeId: p.originNodeId,
-            type: 'pickup',
-            passengerIds: [p.id],
-            maxWait: waitTime,
-          });
-        }
-      }
-      if (dNode && p.deliveryTime != null) {
-        const existing = dropoffByNode.get(p.destinationNodeId);
-        if (existing) {
-          existing.passengerIds.push(p.id);
-        } else {
-          dropoffByNode.set(p.destinationNodeId, {
-            x: dNode.x,
-            y: dNode.y,
-            nodeId: p.destinationNodeId,
-            type: 'dropoff',
-            passengerIds: [p.id],
-            maxWait: 0,
-          });
-        }
-      }
-    }
-    return [...pickupByNode.values(), ...dropoffByNode.values()];
-  }, [inAnalysis, analysisPassengers]);
+      if (!oNode || !dNode) continue;
 
-  // OD pair lines for every served passenger (pickup -> dropoff)
-  const odLines = useMemo(() => {
-    if (!inAnalysis || !analysisPassengers) return [];
-    const lines: { x1: number; y1: number; x2: number; y2: number; id: number }[] = [];
-    for (const p of analysisPassengers) {
-      const o = nodeById.get(p.originNodeId);
-      const d = nodeById.get(p.destinationNodeId);
-      if (!o || !d) continue;
-      lines.push({ x1: o.x, y1: o.y, x2: d.x, y2: d.y, id: p.id });
+      if (p.status === 'waiting') {
+        markers.push({
+          id: p.id, status: 'waiting',
+          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
+          originColor: PICKUP_COLOR, hasDest: false, destColor: '',
+        });
+      } else if (p.status === 'picked_up') {
+        markers.push({
+          id: p.id, status: 'picked_up',
+          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
+          originColor: '#10b981', hasDest: true, destColor: '#10b981',
+        });
+      } else if (p.status === 'delivered') {
+        markers.push({
+          id: p.id, status: 'delivered',
+          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
+          originColor: '#10b981', hasDest: true, destColor: '#10b981',
+        });
+      } else if (p.status === 'cancelled') {
+        markers.push({
+          id: p.id, status: 'cancelled',
+          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
+          originColor: PICKUP_COLOR, hasDest: true, destColor: '#ef4444',
+        });
+      }
     }
-    return lines;
-  }, [inAnalysis, analysisPassengers]);
+    return markers;
+  }, [inAnalysis, passengers]);
 
   return (
     <div className="panel network-panel">
@@ -316,17 +263,6 @@ export default function NetworkMap({
             >
               <path d="M 0 0 L 10 5 L 0 10 z" fill={ROUTE_TRACE_COLOR} />
             </marker>
-            <marker
-              id="arrow-heat-high"
-              viewBox="0 0 10 10"
-              refX="9"
-              refY="5"
-              markerWidth="4"
-              markerHeight="4"
-              orient="auto-start-reverse"
-            >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
-            </marker>
           </defs>
 
           {/* Base links */}
@@ -335,26 +271,6 @@ export default function NetworkMap({
             const to = nodeById.get(link.to);
             if (!from || !to) return null;
             const edgeKey = normalizeEdgeKey(link.from, link.to);
-
-            if (inAnalysis) {
-              const heat = edgeHeatmap.map.get(edgeKey);
-              const isOnRoute = routeEdgeKeys.has(edgeKey);
-              const ratio =
-                heat && edgeHeatmap.maxCount > 0 ? heat.count / edgeHeatmap.maxCount : 0;
-              const stroke = heat ? heatColor(ratio) : '#374151';
-              const width = heat ? 1.2 + ratio * 3.2 : 0.6;
-              const opacity = heat ? 0.9 : 0.25;
-              return (
-                <line
-                  key={`link-${link.id}`}
-                  x1={from.x} y1={from.y}
-                  x2={to.x} y2={to.y}
-                  stroke={isOnRoute && !heat ? ROUTE_TRACE_COLOR : stroke}
-                  strokeWidth={width}
-                  strokeOpacity={opacity}
-                />
-              );
-            }
 
             const colorsOnEdge = movingLinkColors.get(edgeKey);
             const load = colorsOnEdge?.length ?? 0;
@@ -382,11 +298,8 @@ export default function NetworkMap({
             const from = nodeById.get(e.from);
             const to = nodeById.get(e.to);
             if (!from || !to) return null;
-            // Midpoint slightly toward "to" so marker is visible
             const mx = from.x + (to.x - from.x) * 0.55;
             const my = from.y + (to.y - from.y) * 0.55;
-            const ratio = edgeHeatmap.maxCount > 0 ? e.count / edgeHeatmap.maxCount : 0;
-            const arrowId = ratio > 0.66 ? 'arrow-heat-high' : 'arrow-route';
             return (
               <line
                 key={`arrow-${idx}`}
@@ -396,17 +309,17 @@ export default function NetworkMap({
                 y2={my}
                 stroke="transparent"
                 strokeWidth={0.1}
-                markerEnd={`url(#${arrowId})`}
+                markerEnd="url(#arrow-route)"
               />
             );
           })}
 
           {/* OD pair connection lines (dashed, behind markers) */}
-          {inAnalysis && odLines.map(l => (
+          {inAnalysis && perPassengerMarkers.map(m => (
             <line
-              key={`od-${l.id}`}
-              x1={l.x1} y1={l.y1}
-              x2={l.x2} y2={l.y2}
+              key={`od-${m.id}`}
+              x1={m.ox} y1={m.oy}
+              x2={m.dx} y2={m.dy}
               stroke={OD_LINE_COLOR}
               strokeWidth={0.4}
               strokeOpacity={0.4}
@@ -417,31 +330,14 @@ export default function NetworkMap({
           {/* Nodes */}
           {nodes.map(node => {
             const wCount = waitingByNode.get(node.id) || 0;
-            const activity = nodeActivityById.get(node.id);
-            const activityTotal = activity
-              ? activity.pickupCount + activity.dropoffCount
-              : 0;
-            const activityRatio =
-              maxNodeActivity > 0 ? activityTotal / maxNodeActivity : 0;
-            const activityRing = inAnalysis && activityTotal > 0;
             return (
               <g key={`node-${node.id}`}>
-                {wCount > 0 && (
+                {!inAnalysis && wCount > 0 && (
                   <circle
                     cx={node.x} cy={node.y}
                     r={8 + wCount * 2}
                     fill="#f59e0b"
                     fillOpacity={0.15}
-                  />
-                )}
-                {activityRing && (
-                  <circle
-                    cx={node.x} cy={node.y}
-                    r={7 + activityRatio * 6}
-                    fill="none"
-                    stroke="#a78bfa"
-                    strokeOpacity={0.35 + activityRatio * 0.35}
-                    strokeWidth={0.8}
                   />
                 )}
                 <circle
@@ -455,7 +351,7 @@ export default function NetworkMap({
                 >
                   {node.label}
                 </text>
-                {wCount > 0 && (
+                {!inAnalysis && wCount > 0 && (
                   <text
                     x={node.x + 8} y={node.y - 6}
                     fill="#f59e0b" fontSize={5} fontWeight="bold"
@@ -463,63 +359,45 @@ export default function NetworkMap({
                     {wCount}
                   </text>
                 )}
-                {activityRing && (
-                  <text
-                    x={node.x + 7} y={node.y + 9}
-                    fill="#c4b5fd" fontSize={3.8} fontWeight="bold"
-                  >
-                    ↑{activity!.pickupCount}↓{activity!.dropoffCount}
-                  </text>
-                )}
               </g>
             );
           })}
 
-          {/* Passenger markers (analysis) with IDs & wait severity */}
-          {inAnalysis && passengerMarkers.map(m => {
-            const size = 4;
-            const count = m.passengerIds.length;
-            const idsLabel =
-              count <= 2
-                ? m.passengerIds.map(id => `P${id}`).join(',')
-                : `P${m.passengerIds[0]}+${count - 1}`;
-            if (m.type === 'pickup') {
-              const color = waitSeverityColor(m.maxWait, maxWaitTimeThreshold);
-              return (
-                <g key={`pm-pickup-${m.nodeId}`}>
-                  <polygon
-                    points={`${m.x - 6},${m.y - size - 3} ${m.x + 6},${m.y - size - 3} ${m.x},${m.y - 1}`}
-                    fill={color}
-                    fillOpacity={0.85}
-                    stroke="#fff"
-                    strokeWidth={0.3}
-                  />
-                  <text
-                    x={m.x} y={m.y - size - 5}
-                    textAnchor="middle" fill={color}
-                    fontSize={3.8} fontWeight="bold"
-                  >
-                    {idsLabel}
-                  </text>
-                </g>
-              );
-            }
+          {/* Per-passenger request markers (analysis) */}
+          {inAnalysis && perPassengerMarkers.map(m => {
+            const s = 4;
             return (
-              <g key={`pm-dropoff-${m.nodeId}`}>
+              <g key={`req-${m.id}`}>
+                {/* Origin: inverted triangle ▽ above node */}
                 <polygon
-                  points={`${m.x - 6},${m.y + size + 3} ${m.x + 6},${m.y + size + 3} ${m.x},${m.y + 1}`}
-                  fill={DROPOFF_COLOR}
-                  fillOpacity={0.85}
-                  stroke="#fff"
-                  strokeWidth={0.3}
+                  points={`${m.ox - 5},${m.oy - s - 3} ${m.ox + 5},${m.oy - s - 3} ${m.ox},${m.oy - 1}`}
+                  fill={m.originColor} fillOpacity={0.85}
+                  stroke="#fff" strokeWidth={0.3}
                 />
                 <text
-                  x={m.x} y={m.y + size + 8}
-                  textAnchor="middle" fill={DROPOFF_COLOR}
-                  fontSize={3.8} fontWeight="bold"
+                  x={m.ox} y={m.oy - s - 5}
+                  textAnchor="middle" fill={m.originColor}
+                  fontSize={3.5} fontWeight="bold"
                 >
-                  {idsLabel}
+                  P{m.id}
                 </text>
+                {/* Destination: triangle △ below node */}
+                {m.hasDest && (
+                  <>
+                    <polygon
+                      points={`${m.dx - 5},${m.dy + s + 1} ${m.dx + 5},${m.dy + s + 1} ${m.dx},${m.dy - s + 3}`}
+                      fill={m.destColor} fillOpacity={0.85}
+                      stroke="#fff" strokeWidth={0.3}
+                    />
+                    <text
+                      x={m.dx} y={m.dy + s + 5}
+                      textAnchor="middle" fill={m.destColor}
+                      fontSize={3.5} fontWeight="bold"
+                    >
+                      D{m.id}
+                    </text>
+                  </>
+                )}
               </g>
             );
           })}
@@ -586,25 +464,25 @@ export default function NetworkMap({
           {inAnalysis ? (
             <>
               <div className="legend-item">
-                <span className="legend-bar" style={{
-                  background: 'linear-gradient(to right, #60a5fa, #facc15, #ef4444)',
-                }} />
-                Link usage (low → high)
+                <span className="legend-dot" style={{ background: '#3b82f6' }} /> Idle
               </div>
               <div className="legend-item">
-                <span className="legend-triangle-up" style={{ borderBottomColor: PICKUP_COLOR }} /> Pickup
+                <span className="legend-dot" style={{ background: '#f59e0b' }} /> Picking up
               </div>
               <div className="legend-item">
-                <span className="legend-triangle-down" style={{ borderTopColor: DROPOFF_COLOR }} /> Dropoff
+                <span className="legend-dot" style={{ background: '#10b981' }} /> Carrying
               </div>
               <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#ef4444' }} /> Wait exceeded
+                <span className="legend-triangle-down" style={{ borderTopColor: PICKUP_COLOR }} /> P: Waiting
               </div>
               <div className="legend-item">
-                <span
-                  className="legend-dot"
-                  style={{ background: 'transparent', border: `1px solid ${ROUTE_TRACE_COLOR}` }}
-                /> Activity ring
+                <span className="legend-triangle-down" style={{ borderTopColor: '#10b981' }} /> P: Picked up
+              </div>
+              <div className="legend-item">
+                <span className="legend-triangle-up" style={{ borderBottomColor: '#10b981' }} /> D: Dropoff
+              </div>
+              <div className="legend-item">
+                <span className="legend-triangle-up" style={{ borderBottomColor: '#ef4444' }} /> D: Cancelled
               </div>
               <div className="legend-item">
                 <span className="legend-dash" /> OD pair

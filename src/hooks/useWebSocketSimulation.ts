@@ -161,6 +161,10 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
   }, []);
 
   const enterAnalysis = useCallback(() => {
+    for (const frame of bufferRef.current) {
+      onFrameConsumedRef.current?.(frame);
+    }
+    bufferRef.current = [];
     setSimFinished(false);
   }, []);
 
@@ -175,14 +179,6 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
   const stop = useCallback(() => {
     sendCommand('stop');
     stopPlayback();
-    for (const frame of bufferRef.current) {
-      onFrameConsumedRef.current?.(frame);
-    }
-    const last = bufferRef.current[bufferRef.current.length - 1];
-    if (last) {
-      setState(last);
-    }
-    bufferRef.current = [];
     setIsRunning(false);
   }, [sendCommand, stopPlayback]);
 

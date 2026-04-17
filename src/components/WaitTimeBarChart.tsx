@@ -22,7 +22,7 @@ export default function WaitTimeBarChart({ data, maxWaitTime }: WaitTimeBarChart
                 dataKey="passengerId"
                 stroke="#94a3b8"
                 fontSize={10}
-                label={{ value: 'Passenger', position: 'insideBottom', offset: -2, fill: '#94a3b8', fontSize: 9 }}
+                label={{ value: 'Passenger ID', position: 'insideBottom', offset: -2, fill: '#94a3b8', fontSize: 9 }}
               />
               <YAxis
                 stroke="#94a3b8"

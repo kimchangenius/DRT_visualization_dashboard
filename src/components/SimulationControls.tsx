@@ -215,50 +215,54 @@ export default function SimulationControls({
           </button>
         </div>
 
-        <div className="control-config">
-          <div className="control-config-title">Environment</div>
-          <dl className="control-config-rows">
-            <div className="control-config-row">
-              <dt>Vehicles</dt>
-              <dd>
-                <strong>{fmtInt(maxNumVehicles)}</strong>
-              </dd>
-            </div>
-            <div className="control-config-row">
-              <dt>Vehicle capacity</dt>
-              <dd>
-                <strong>{fmtInt(vehCapacity)}</strong>
-              </dd>
-            </div>
-            <div className="control-config-row">
-              <dt>Max wait time</dt>
-              <dd>
-                <strong>{fmtInt(maxWaitTime)}</strong> min
-              </dd>
-            </div>
-          </dl>
+        <div className={`control-config${inAnalysisMode ? ' in-analysis' : ''}`}>
+          {!inAnalysisMode && (
+            <>
+              <div className="control-config-title">Environment</div>
+              <dl className="control-config-rows">
+                <div className="control-config-row">
+                  <dt>Vehicles</dt>
+                  <dd>
+                    <strong>{fmtInt(maxNumVehicles)}</strong>
+                  </dd>
+                </div>
+                <div className="control-config-row">
+                  <dt>Vehicle capacity</dt>
+                  <dd>
+                    <strong>{fmtInt(vehCapacity)}</strong>
+                  </dd>
+                </div>
+                <div className="control-config-row">
+                  <dt>Max wait time</dt>
+                  <dd>
+                    <strong>{fmtInt(maxWaitTime)}</strong> min
+                  </dd>
+                </div>
+              </dl>
 
-          <div className="control-config-title">Policy network (trained)</div>
-          <dl className="control-config-rows">
-            <div className="control-config-row">
-              <dt>Hidden dim</dt>
-              <dd>
-                <strong>{fmtInt(hiddenDim)}</strong>
-              </dd>
-            </div>
-            <div className="control-config-row">
-              <dt>Batch size</dt>
-              <dd>
-                <strong>{fmtInt(batchSize)}</strong>
-              </dd>
-            </div>
-            <div className="control-config-row">
-              <dt>Learning rate</dt>
-              <dd>
-                <strong>{fmtLearningRate(learningRate)}</strong>
-              </dd>
-            </div>
-          </dl>
+              <div className="control-config-title">Policy network (trained)</div>
+              <dl className="control-config-rows">
+                <div className="control-config-row">
+                  <dt>Hidden dim</dt>
+                  <dd>
+                    <strong>{fmtInt(hiddenDim)}</strong>
+                  </dd>
+                </div>
+                <div className="control-config-row">
+                  <dt>Batch size</dt>
+                  <dd>
+                    <strong>{fmtInt(batchSize)}</strong>
+                  </dd>
+                </div>
+                <div className="control-config-row">
+                  <dt>Learning rate</dt>
+                  <dd>
+                    <strong>{fmtLearningRate(learningRate)}</strong>
+                  </dd>
+                </div>
+              </dl>
+            </>
+          )}
 
           {showAnalysisVehicles ? (
             <div className="control-vehicles">
@@ -291,70 +295,106 @@ export default function SimulationControls({
               {analysisVehicleId !== null && analysisSummary && (
                 <div className="analysis-summary-card">
                   <div className="analysis-summary-title">Vehicle V{analysisVehicleId} Summary</div>
-                  <div className="analysis-summary-grid">
-                    <div className="stat-item">
-                      <span className="stat-label">Served</span>
-                      <span className="stat-value">{analysisSummary.servedPassengers}</span>
-                    </div>
-                    <div className="stat-item">
-                      <span className="stat-label">Trips</span>
-                      <span className="stat-value">{analysisSummary.totalTrips}</span>
-                    </div>
-                    <div className="stat-item">
-                      <span className="stat-label">Distance</span>
-                      <span className="stat-value">{analysisSummary.totalDistance.toFixed(1)}</span>
-                    </div>
-                    <div className="stat-item">
-                      <span className="stat-label">Avg Wait</span>
-                      <span className="stat-value">{analysisSummary.avgWaitTime.toFixed(1)}</span>
-                    </div>
-                    <div className="stat-item">
-                      <span className="stat-label">Max Wait</span>
-                      <span
-                        className="stat-value"
-                        style={{
-                          color: waitSeverityColor(analysisSummary.maxWaitTime, maxWaitTimeThreshold),
-                        }}
-                      >
-                        {analysisSummary.maxWaitTime.toFixed(1)}
-                      </span>
-                    </div>
-                    <div className="stat-item">
-                      <span className="stat-label">Avg Detour</span>
-                      <span className="stat-value">×{analysisSummary.avgDetourFactor.toFixed(2)}</span>
-                    </div>
-                    <div className="stat-item stat-item-wide">
-                      <span className="stat-label">Status Share</span>
-                      <div className="stat-bar">
-                        <div
-                          className="stat-bar-seg"
-                          style={{ width: `${analysisSummary.idlePct}%`, background: '#3b82f6' }}
-                          title={`Idle ${analysisSummary.idlePct}%`}
-                        />
-                        <div
-                          className="stat-bar-seg"
-                          style={{ width: `${analysisSummary.pickupPct}%`, background: '#f59e0b' }}
-                          title={`Pickup ${analysisSummary.pickupPct}%`}
-                        />
-                        <div
-                          className="stat-bar-seg"
-                          style={{ width: `${analysisSummary.carryingPct}%`, background: '#10b981' }}
-                          title={`Carrying ${analysisSummary.carryingPct}%`}
-                        />
+
+                  <div className="analysis-section">
+                    <div className="analysis-section-title">Service Quality</div>
+                    <div className="analysis-summary-grid">
+                      <div className="stat-item">
+                        <span className="stat-label">Service Rate</span>
+                        <span className="stat-value">{analysisSummary.serviceRate.toFixed(1)}%</span>
                       </div>
-                      <div className="stat-bar-legend">
-                        <span className="stat-bar-legend-item">
-                          <span className="stat-bar-legend-dot" style={{ background: '#3b82f6' }} />
-                          Idle {analysisSummary.idlePct}%
+                      <div className="stat-item">
+                        <span className="stat-label">Avg Wait</span>
+                        <span className="stat-value">{analysisSummary.avgWaitTime.toFixed(1)}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Max Wait</span>
+                        <span
+                          className="stat-value"
+                          style={{
+                            color: waitSeverityColor(analysisSummary.maxWaitTime, maxWaitTimeThreshold),
+                          }}
+                        >
+                          {analysisSummary.maxWaitTime.toFixed(1)}
                         </span>
-                        <span className="stat-bar-legend-item">
-                          <span className="stat-bar-legend-dot" style={{ background: '#f59e0b' }} />
-                          Pickup {analysisSummary.pickupPct}%
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Avg Detour</span>
+                        <span className="stat-value">×{analysisSummary.avgDetourFactor.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="analysis-section">
+                    <div className="analysis-section-title">Operational Efficiency</div>
+                    <div className="analysis-summary-grid">
+                      <div className="stat-item">
+                        <span className="stat-label">Trips</span>
+                        <span className="stat-value">{analysisSummary.totalTrips}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Distance</span>
+                        <span className="stat-value">{analysisSummary.totalDistance.toFixed(1)}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Dist/Trip</span>
+                        <span className="stat-value">{analysisSummary.distancePerTrip.toFixed(1)}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Served / Cancel</span>
+                        <span className="stat-value">
+                          {analysisSummary.servedPassengers}
+                          <span style={{ color: '#6b7280', margin: '0 2px' }}>/</span>
+                          <span style={{ color: analysisSummary.cancelledPassengers > 0 ? '#ef4444' : undefined }}>
+                            {analysisSummary.cancelledPassengers}
+                          </span>
                         </span>
-                        <span className="stat-bar-legend-item">
-                          <span className="stat-bar-legend-dot" style={{ background: '#10b981' }} />
-                          Carrying {analysisSummary.carryingPct}%
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="analysis-section">
+                    <div className="analysis-section-title">Vehicle Utilization</div>
+                    <div className="analysis-summary-grid">
+                      <div className="stat-item">
+                        <span className="stat-label">Effective Util.</span>
+                        <span className="stat-value" style={{ color: '#10b981' }}>
+                          {analysisSummary.carryingPct}%
                         </span>
+                      </div>
+                      <div className="stat-item stat-item-wide">
+                        <span className="stat-label">Status Share</span>
+                        <div className="stat-bar">
+                          <div
+                            className="stat-bar-seg"
+                            style={{ width: `${analysisSummary.idlePct}%`, background: '#3b82f6' }}
+                            title={`Idle ${analysisSummary.idlePct}%`}
+                          />
+                          <div
+                            className="stat-bar-seg"
+                            style={{ width: `${analysisSummary.pickupPct}%`, background: '#f59e0b' }}
+                            title={`Pickup ${analysisSummary.pickupPct}%`}
+                          />
+                          <div
+                            className="stat-bar-seg"
+                            style={{ width: `${analysisSummary.carryingPct}%`, background: '#10b981' }}
+                            title={`Carrying ${analysisSummary.carryingPct}%`}
+                          />
+                        </div>
+                        <div className="stat-bar-legend">
+                          <span className="stat-bar-legend-item">
+                            <span className="stat-bar-legend-dot" style={{ background: '#3b82f6' }} />
+                            Idle {analysisSummary.idlePct}%
+                          </span>
+                          <span className="stat-bar-legend-item">
+                            <span className="stat-bar-legend-dot" style={{ background: '#f59e0b' }} />
+                            Pickup {analysisSummary.pickupPct}%
+                          </span>
+                          <span className="stat-bar-legend-item">
+                            <span className="stat-bar-legend-dot" style={{ background: '#10b981' }} />
+                            Carrying {analysisSummary.carryingPct}%
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>

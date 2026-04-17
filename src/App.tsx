@@ -7,6 +7,7 @@ import SimulationControls from './components/SimulationControls';
 import NetworkMap from './components/NetworkMap';
 import MetricsPanel from './components/MetricsPanel';
 import RequestInformation from './components/RequestInformation';
+import VehicleRequestOperation from './components/VehicleRequestOperation';
 import VehicleUtilChart from './components/VehicleUtilChart';
 import PassengerChart from './components/PassengerChart';
 import RequestStatusChart from './components/RequestStatusChart';
@@ -34,6 +35,7 @@ export default function App() {
     start,
     stop,
     reset: wsReset,
+    enterAnalysis,
   } = useWebSocketSimulation({ onFrameConsumed });
 
   const handleStart = useCallback(() => {
@@ -48,9 +50,10 @@ export default function App() {
   }, [history.clearHistory, wsReset]);
 
   const handleEnterAnalysis = useCallback(() => {
+    enterAnalysis();
     setAnalysisEntered(true);
     history.setReplayTime(0);
-  }, [history.setReplayTime]);
+  }, [enterAnalysis, history.setReplayTime]);
 
   // Analysis 버튼 활성: 시뮬레이션 멈춰있고 히스토리 있고 아직 분석모드 미진입
   const canEnterAnalysis = !isRunning && history.hasHistory && !analysisEntered;
@@ -125,13 +128,15 @@ export default function App() {
 
             <section className="dashboard-left-map">
               <NetworkMap
-                vehicles={state.vehicles}
-                passengers={state.passengers}
+                vehicles={analysisActive && history.analysis?.replayVehicles
+                  ? history.analysis.replayVehicles
+                  : state.vehicles}
+                passengers={analysisActive && history.analysis?.replayPassengers
+                  ? history.analysis.replayPassengers
+                  : state.passengers}
                 analysisVehicleId={analysisActive ? history.analysisVehicleId : undefined}
-                routeEdges={analysisActive ? history.analysis?.routeEdges : undefined}
-                analysisPassengers={analysisActive ? history.analysis?.assignedPassengers : undefined}
                 edgeTraversals={analysisActive ? history.analysis?.edgeTraversals : undefined}
-                nodeActivity={analysisActive ? history.analysis?.nodeActivity : undefined}
+                // nodeActivity={analysisActive ? history.analysis?.nodeActivity : undefined}  // Activity ring – disabled
                 maxWaitTimeThreshold={state.maxWaitTime}
               />
             </section>
@@ -139,7 +144,15 @@ export default function App() {
         </div>
 
         <aside className="dashboard-layout-right">
-          <RequestInformation passengers={passengers} currentTime={currentTime} />
+          {analysisActive && history.analysis ? (
+            <VehicleRequestOperation
+              vehicleId={history.analysisVehicleId!}
+              assignedPassengers={history.analysis.assignedPassengers}
+              replayTime={history.replayTime}
+            />
+          ) : (
+            <RequestInformation passengers={passengers} currentTime={currentTime} />
+          )}
           {analysisActive && history.analysis ? (
             <>
               <WaitTimeBarChart
