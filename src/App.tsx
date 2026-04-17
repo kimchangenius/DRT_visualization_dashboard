@@ -1,4 +1,5 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useState } from 'react';
+
 import { useWebSocketSimulation } from './hooks/useWebSocketSimulation';
 import { useSimulationHistory } from './hooks/useSimulationHistory';
 import Header from './components/Header';
@@ -6,6 +7,7 @@ import SimulationControls from './components/SimulationControls';
 import NetworkMap from './components/NetworkMap';
 import MetricsPanel from './components/MetricsPanel';
 import RequestInformation from './components/RequestInformation';
+import VehicleRequestOperation from './components/VehicleRequestOperation';
 import VehicleUtilChart from './components/VehicleUtilChart';
 import PassengerChart from './components/PassengerChart';
 import RequestStatusChart from './components/RequestStatusChart';
@@ -22,6 +24,8 @@ export default function App() {
     [history.addFrame],
   );
 
+  const [analysisEntered, setAnalysisEntered] = useState(false);
+
   const {
     state,
     connectionStatus,
@@ -31,21 +35,34 @@ export default function App() {
     start,
     stop,
     reset: wsReset,
+    enterAnalysis,
   } = useWebSocketSimulation({ onFrameConsumed });
+
+  const handleStart = useCallback(() => {
+    setAnalysisEntered(false);
+    start();
+  }, [start]);
 
   const reset = useCallback(() => {
     history.clearHistory();
     wsReset();
+    setAnalysisEntered(false);
   }, [history.clearHistory, wsReset]);
 
-  const analysisActive =
-    !isRunning && history.hasHistory && history.analysisVehicleId != null;
-  const canAnalyse = !isRunning && history.hasHistory;
+  const handleEnterAnalysis = useCallback(() => {
+    enterAnalysis();
+    setAnalysisEntered(true);
+    history.setReplayTime(0);
+  }, [enterAnalysis, history.setReplayTime]);
 
-  const analysisVehicles = useMemo(() => {
-    if (!analysisActive || !history.analysis?.currentVehicle) return state.vehicles;
-    return state.vehicles;
-  }, [analysisActive, history.analysis, state.vehicles]);
+  // Analysis 버튼 활성: 시뮬레이션 멈춰있고 히스토리 있고 아직 분석모드 미진입
+  const canEnterAnalysis = !isRunning && history.hasHistory && !analysisEntered;
+
+  // 분석모드: 버튼을 명시적으로 눌렀을 때만
+  const inAnalysisMode = analysisEntered && history.hasHistory;
+
+  // User has entered analysis mode AND selected a vehicle
+  const analysisActive = inAnalysisMode && history.analysisVehicleId != null;
 
   const metrics = analysisActive && history.analysis
     ? history.analysis.metrics
@@ -86,37 +103,56 @@ export default function App() {
                 hiddenDim={state.hiddenDim}
                 batchSize={state.batchSize}
                 learningRate={state.learningRate}
-                vehicles={state.vehicles}
-                passengers={state.passengers}
-                onStart={start}
+                onStart={handleStart}
                 onStop={stop}
                 onReset={reset}
-                analysisMode={canAnalyse}
+                canEnterAnalysis={canEnterAnalysis}
+                inAnalysisMode={inAnalysisMode}
+                onEnterAnalysis={handleEnterAnalysis}
                 analysisVehicleId={history.analysisVehicleId}
                 analysisVehicleIds={history.vehicleIds}
                 onSelectAnalysisVehicle={history.selectVehicle}
+                analysisCurrentVehicle={history.analysis?.currentVehicle}
+                analysisPassengers={history.analysis?.assignedPassengers}
                 replayTime={history.replayTime}
                 onReplayTimeChange={history.setReplayTime}
                 isReplaying={history.isReplaying}
                 onToggleReplay={history.toggleReplay}
                 timeRange={history.timeRange}
+                vehicles={state.vehicles}
+                passengers={state.passengers}
+                analysisSummary={analysisActive ? history.analysis?.summary : undefined}
+                maxWaitTimeThreshold={state.maxWaitTime}
               />
             </aside>
 
             <section className="dashboard-left-map">
               <NetworkMap
-                vehicles={analysisVehicles}
-                passengers={analysisActive ? [] : state.passengers}
+                vehicles={analysisActive && history.analysis?.replayVehicles
+                  ? history.analysis.replayVehicles
+                  : state.vehicles}
+                passengers={analysisActive && history.analysis?.replayPassengers
+                  ? history.analysis.replayPassengers
+                  : state.passengers}
                 analysisVehicleId={analysisActive ? history.analysisVehicleId : undefined}
-                routeEdges={analysisActive ? history.analysis?.routeEdges : undefined}
-                analysisPassengers={analysisActive ? history.analysis?.assignedPassengers : undefined}
+                edgeTraversals={analysisActive ? history.analysis?.edgeTraversals : undefined}
+                // nodeActivity={analysisActive ? history.analysis?.nodeActivity : undefined}  // Activity ring – disabled
+                maxWaitTimeThreshold={state.maxWaitTime}
               />
             </section>
           </div>
         </div>
 
         <aside className="dashboard-layout-right">
-          <RequestInformation passengers={passengers} currentTime={currentTime} />
+          {analysisActive && history.analysis ? (
+            <VehicleRequestOperation
+              vehicleId={history.analysisVehicleId!}
+              assignedPassengers={history.analysis.assignedPassengers}
+              replayTime={history.replayTime}
+            />
+          ) : (
+            <RequestInformation passengers={passengers} currentTime={currentTime} />
+          )}
           {analysisActive && history.analysis ? (
             <>
               <WaitTimeBarChart

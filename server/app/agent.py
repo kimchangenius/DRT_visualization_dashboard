@@ -31,11 +31,11 @@ class DQNAgent:
         v_embed = TimeDistributed(Dense(self.hidden_dim, activation='relu'))(vehicle_input)
         r_embed = TimeDistributed(Dense(self.hidden_dim, activation='relu'))(request_input)
 
-        v_expand = tf.expand_dims(v_embed, axis=2)
-        r_expand = tf.expand_dims(r_embed, axis=1)
+        v_expand = Lambda(lambda x: tf.expand_dims(x, axis=2))(v_embed)
+        r_expand = Lambda(lambda x: tf.expand_dims(x, axis=1))(r_embed)
 
-        v_tiled = tf.tile(v_expand, [1, 1, cfg.MAX_NUM_REQUEST, 1])
-        r_tiled = tf.tile(r_expand, [1, cfg.MAX_NUM_VEHICLES, 1, 1])
+        v_tiled = Lambda(lambda x: tf.tile(x, [1, 1, cfg.MAX_NUM_REQUEST, 1]))(v_expand)
+        r_tiled = Lambda(lambda x: tf.tile(x, [1, cfg.MAX_NUM_VEHICLES, 1, 1]))(r_expand)
 
         pair_embed = Concatenate(axis=-1)([v_tiled, r_tiled, relation_input])
 
@@ -43,7 +43,7 @@ class DQNAgent:
         q_match = TimeDistributed(TimeDistributed(Dense(1)))(q_match)
         q_match = Lambda(lambda x: tf.squeeze(x, axis=-1))(q_match)
 
-        r_summary = tf.reduce_mean(r_embed, axis=1)
+        r_summary = Lambda(lambda x: tf.reduce_mean(x, axis=1))(r_embed)
         r_summary = RepeatVector(cfg.MAX_NUM_VEHICLES)(r_summary)
         reject_context = Concatenate(axis=-1)([v_embed, r_summary])
 
