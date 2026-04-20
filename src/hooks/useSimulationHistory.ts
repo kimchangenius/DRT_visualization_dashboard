@@ -155,6 +155,7 @@ export function useSimulationHistory() {
           passengerId: p.id,
           waitTime: p.pickupTime - p.requestTime,
           requestTime: p.requestTime,
+          pickupTime: p.pickupTime,
         });
       }
     }
@@ -171,6 +172,7 @@ export function useSimulationHistory() {
             detourFactor: Math.round((actualTravelTime / directTravelTime) * 100) / 100,
             actualTravelTime,
             directTravelTime,
+            deliveryTime: p.deliveryTime,
           });
         }
       }
@@ -226,21 +228,32 @@ export function useSimulationHistory() {
       }
     }
 
-    // --- Summary stats ---
-    const servedPassengers = assignedPassengers.filter(p => p.deliveryTime != null).length;
-    const cancelledPassengers = assignedPassengers.filter(p => p.status === 'cancelled').length;
-    const waitTimes = waitTimeData.map(w => w.waitTime);
+    // --- Summary stats (up to replay time) ---
+    const servedPassengers = assignedPassengers.filter(
+      p => p.deliveryTime != null && p.deliveryTime <= replayTime,
+    ).length;
+    const cancelledPassengers = assignedPassengers.filter(
+      p => p.status === 'cancelled' && p.requestTime <= replayTime,
+    ).length;
+    const replayWaitData = waitTimeData.filter(w => w.pickupTime <= replayTime);
+    const waitTimes = replayWaitData.map(w => w.waitTime);
     const avgWaitTime = waitTimes.length
       ? waitTimes.reduce((a, b) => a + b, 0) / waitTimes.length
       : 0;
     const maxWaitTime = waitTimes.length ? Math.max(...waitTimes) : 0;
-    const detours = detourFactorData.map(d => d.detourFactor);
+    const replayDetourData = detourFactorData.filter(d => d.deliveryTime <= replayTime);
+    const detours = replayDetourData.map(d => d.detourFactor);
     const avgDetourFactor = detours.length
       ? detours.reduce((a, b) => a + b, 0) / detours.length
       : 0;
-    const lastEff = efficiencyData[efficiencyData.length - 1];
-    const totalDistance = currentVehicle?.totalDistance ?? lastFrame.vehicles.find(v => v.id === vid)?.totalDistance ?? 0;
-    const totalTrips = currentVehicle?.totalTrips ?? lastFrame.vehicles.find(v => v.id === vid)?.totalTrips ?? 0;
+    let replayEff = efficiencyData[0];
+    for (const e of efficiencyData) {
+      if (e.time <= replayTime) replayEff = e;
+      else break;
+    }
+    const replayVehicle = currentVehicle ?? replayVehicles.find(v => v.id === vid) ?? null;
+    const totalDistance = replayVehicle?.totalDistance ?? 0;
+    const totalTrips = replayVehicle?.totalTrips ?? 0;
     const totalAssigned = servedPassengers + cancelledPassengers;
     const summary: VehicleAnalysisSummary = {
       totalDistance,
@@ -250,9 +263,9 @@ export function useSimulationHistory() {
       avgWaitTime: Math.round(avgWaitTime * 10) / 10,
       avgDetourFactor: Math.round(avgDetourFactor * 100) / 100,
       maxWaitTime: Math.round(maxWaitTime * 10) / 10,
-      idlePct: lastEff?.idlePct ?? 0,
-      pickupPct: lastEff?.pickupPct ?? 0,
-      carryingPct: lastEff?.carryingPct ?? 0,
+      idlePct: replayEff?.idlePct ?? 0,
+      pickupPct: replayEff?.pickupPct ?? 0,
+      carryingPct: replayEff?.carryingPct ?? 0,
       serviceRate: totalAssigned > 0 ? Math.round((servedPassengers / totalAssigned) * 1000) / 10 : 0,
       distancePerTrip: totalTrips > 0 ? Math.round((totalDistance / totalTrips) * 10) / 10 : 0,
     };

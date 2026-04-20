@@ -158,8 +158,12 @@ export default function App() {
               <WaitTimeBarChart
                 data={history.analysis.waitTimeData}
                 maxWaitTime={state.maxWaitTime}
+                replayTime={history.replayTime}
               />
-              <DetourFactorChart data={history.analysis.detourFactorData} />
+              <DetourFactorChart
+                data={history.analysis.detourFactorData}
+                replayTime={history.replayTime}
+              />
               <OperationalEfficiencyChart data={history.analysis.efficiencyData} />
             </>
           ) : (

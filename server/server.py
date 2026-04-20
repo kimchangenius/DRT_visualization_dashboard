@@ -167,10 +167,15 @@ def compute_link_loads(environment):
 def build_state(environment):
     metrics = compute_metrics(environment)
 
-    visible_passengers = [
+    active_passengers = [
         extract_passenger(r) for r in environment.active_request_list
         if r.status in (RequestStatus.PENDING, RequestStatus.ACCEPTED, RequestStatus.PICKEDUP)
     ]
+    served_passengers = [
+        extract_passenger(r) for r in environment.done_request_list
+        if r.status == RequestStatus.SERVED
+    ]
+    visible_passengers = active_passengers + served_passengers
 
     return {
         'metrics': metrics,

@@ -118,6 +118,7 @@ export interface WaitTimeBarDatum {
   passengerId: number;
   waitTime: number;
   requestTime: number;
+  pickupTime: number;
 }
 
 export interface DetourFactorDatum {
@@ -125,6 +126,7 @@ export interface DetourFactorDatum {
   detourFactor: number;
   actualTravelTime: number;
   directTravelTime: number;
+  deliveryTime: number;
 }
 
 export interface EfficiencyDatum {

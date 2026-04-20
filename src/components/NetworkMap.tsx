@@ -206,9 +206,11 @@ export default function NetworkMap({
     if (!inAnalysis || analysisVehicleId == null) return [];
     const markers: PerPassengerMarker[] = [];
     for (const p of passengers) {
-      const isAcceptedByAnalysisVehicle = p.assignedVehicleId === analysisVehicleId;
-      const isUnaccepted = p.assignedVehicleId == null;
-      if (!isAcceptedByAnalysisVehicle && !isUnaccepted) continue;
+      const isUnaccepted = p.status === 'waiting' && p.assignedVehicleId == null;
+      const isOperatingBySelectedVehicle =
+        p.assignedVehicleId === analysisVehicleId &&
+        (p.status === 'waiting' || p.status === 'picked_up');
+      if (!isUnaccepted && !isOperatingBySelectedVehicle) continue;
 
       const oNode = nodeById.get(p.originNodeId);
       const dNode = nodeById.get(p.destinationNodeId);
@@ -225,18 +227,6 @@ export default function NetworkMap({
           id: p.id, status: 'picked_up',
           ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
           originColor: '#10b981', hasDest: true, destColor: '#10b981',
-        });
-      } else if (p.status === 'delivered') {
-        markers.push({
-          id: p.id, status: 'delivered',
-          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
-          originColor: '#10b981', hasDest: true, destColor: '#10b981',
-        });
-      } else if (p.status === 'cancelled') {
-        markers.push({
-          id: p.id, status: 'cancelled',
-          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
-          originColor: PICKUP_COLOR, hasDest: true, destColor: '#ef4444',
         });
       }
     }

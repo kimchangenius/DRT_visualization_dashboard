@@ -4,18 +4,23 @@ import { CHART_ANIMATION_DURATION_MS } from '../config';
 
 interface DetourFactorChartProps {
   data: DetourFactorDatum[];
+  replayTime?: number;
 }
 
-export default function DetourFactorChart({ data }: DetourFactorChartProps) {
+export default function DetourFactorChart({ data, replayTime }: DetourFactorChartProps) {
+  const visibleData = replayTime == null
+    ? data
+    : data.filter(d => d.deliveryTime <= replayTime);
+
   return (
     <div className="panel chart-panel">
       <h3 className="panel-title">Detour Factor</h3>
       <div className="chart-container">
-        {data.length === 0 ? (
-          <p className="chart-empty-text">No delivered passenger data</p>
+        {visibleData.length === 0 ? (
+          <p className="chart-empty-text">No served passenger data at this time</p>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+            <BarChart data={visibleData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
               <XAxis
                 dataKey="passengerId"
