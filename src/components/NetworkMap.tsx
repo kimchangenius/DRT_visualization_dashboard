@@ -203,9 +203,13 @@ export default function NetworkMap({
     destColor: string;
   };
   const perPassengerMarkers = useMemo<PerPassengerMarker[]>(() => {
-    if (!inAnalysis) return [];
+    if (!inAnalysis || analysisVehicleId == null) return [];
     const markers: PerPassengerMarker[] = [];
     for (const p of passengers) {
+      const isAcceptedByAnalysisVehicle = p.assignedVehicleId === analysisVehicleId;
+      const isUnaccepted = p.assignedVehicleId == null;
+      if (!isAcceptedByAnalysisVehicle && !isUnaccepted) continue;
+
       const oNode = nodeById.get(p.originNodeId);
       const dNode = nodeById.get(p.destinationNodeId);
       if (!oNode || !dNode) continue;
@@ -237,7 +241,7 @@ export default function NetworkMap({
       }
     }
     return markers;
-  }, [inAnalysis, passengers]);
+  }, [inAnalysis, analysisVehicleId, passengers]);
 
   return (
     <div className="panel network-panel">

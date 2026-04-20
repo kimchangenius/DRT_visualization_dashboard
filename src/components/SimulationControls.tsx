@@ -292,6 +292,37 @@ export default function SimulationControls({
                 })}
               </div>
 
+              {analysisVehicleId !== null && (
+                <div className="replay-controls">
+                  <div className="replay-header">
+                    <span className="analysis-badge">
+                      Analysis: Vehicle {analysisVehicleId}
+                    </span>
+                  </div>
+                  <div className="replay-slider-row">
+                    <button
+                      type="button"
+                      className="btn replay-btn"
+                      onClick={onToggleReplay}
+                      title={isReplaying ? 'Pause replay' : 'Play replay'}
+                    >
+                      {isReplaying ? '⏸' : '▶'}
+                    </button>
+                    <input
+                      type="range"
+                      className="slider replay-slider"
+                      min={timeRange.min}
+                      max={timeRange.max}
+                      value={replayTime}
+                      onChange={e => onReplayTimeChange(Number(e.target.value))}
+                    />
+                  </div>
+                  <div className="replay-time-label">
+                    t = {formatSimTime(replayTime)}
+                  </div>
+                </div>
+              )}
+
               {analysisVehicleId !== null && analysisSummary && (
                 <div className="analysis-summary-card">
                   <div className="analysis-summary-title">Vehicle V{analysisVehicleId} Summary</div>
@@ -397,37 +428,6 @@ export default function SimulationControls({
                         </div>
                       </div>
                     </div>
-                  </div>
-                </div>
-              )}
-
-              {analysisVehicleId !== null && (
-                <div className="replay-controls">
-                  <div className="replay-header">
-                    <span className="analysis-badge">
-                      Analysis: Vehicle {analysisVehicleId}
-                    </span>
-                  </div>
-                  <div className="replay-slider-row">
-                    <button
-                      type="button"
-                      className="btn replay-btn"
-                      onClick={onToggleReplay}
-                      title={isReplaying ? 'Pause replay' : 'Play replay'}
-                    >
-                      {isReplaying ? '⏸' : '▶'}
-                    </button>
-                    <input
-                      type="range"
-                      className="slider replay-slider"
-                      min={timeRange.min}
-                      max={timeRange.max}
-                      value={replayTime}
-                      onChange={e => onReplayTimeChange(Number(e.target.value))}
-                    />
-                  </div>
-                  <div className="replay-time-label">
-                    t = {formatSimTime(replayTime)}
                   </div>
                 </div>
               )}

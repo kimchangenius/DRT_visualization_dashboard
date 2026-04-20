@@ -83,6 +83,7 @@ export function useSimulationHistory() {
     if (analysisVehicleId == null || framesRef.current.length === 0) return null;
 
     const frames = framesRef.current;
+    const firstFrame = frames[0];
     const vid = analysisVehicleId;
     const lastFrame = frames[frames.length - 1];
 
@@ -200,8 +201,8 @@ export function useSimulationHistory() {
       }
     }
 
-    // --- Metrics at replay time (or last frame) ---
-    let metricsFrame = lastFrame;
+    // --- Snapshot at replay time (or earliest frame when replayTime is before first frame) ---
+    let metricsFrame = firstFrame;
     for (const frame of frames) {
       if (frame.metrics.currentTime <= replayTime) {
         metricsFrame = frame;
@@ -212,9 +213,9 @@ export function useSimulationHistory() {
     const metrics: SimulationMetrics = metricsFrame.metrics;
 
     // --- Vehicles & passengers snapshot at replay time ---
-    let replayVehicles: Vehicle[] = lastFrame.vehicles;
-    let replayPassengers: Passenger[] = lastFrame.passengers;
-    let currentVehicle: Vehicle | null = null;
+    let replayVehicles: Vehicle[] = firstFrame.vehicles;
+    let replayPassengers: Passenger[] = firstFrame.passengers;
+    let currentVehicle: Vehicle | null = firstFrame.vehicles.find(veh => veh.id === vid) ?? null;
     for (const frame of frames) {
       if (frame.metrics.currentTime <= replayTime) {
         replayVehicles = frame.vehicles;
