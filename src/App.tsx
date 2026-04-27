@@ -13,7 +13,7 @@ import PassengerChart from './components/PassengerChart';
 import RequestStatusChart from './components/RequestStatusChart';
 import WaitTimeBarChart from './components/WaitTimeBarChart';
 import DetourFactorChart from './components/DetourFactorChart';
-import OperationalEfficiencyChart from './components/OperationalEfficiencyChart';
+import VehicleTimelineChart from './components/VehicleTimelineChart';
 import './App.css';
 
 export default function App() {
@@ -164,7 +164,10 @@ export default function App() {
                 data={history.analysis.detourFactorData}
                 replayTime={history.replayTime}
               />
-              <OperationalEfficiencyChart data={history.analysis.efficiencyData} />
+              <VehicleTimelineChart
+                data={history.analysis.timelineData}
+                replayTime={history.replayTime}
+              />
             </>
           ) : (
             <>

@@ -350,36 +350,17 @@ export default function SimulationControls({
                         </span>
                       </div>
                       <div className="stat-item">
+                        <span className="stat-label">Cancel Count</span>
+                        <span
+                          className="stat-value"
+                          style={{ color: analysisSummary.cancelledPassengers > 0 ? '#ef4444' : undefined }}
+                        >
+                          {analysisSummary.cancelledPassengers}
+                        </span>
+                      </div>
+                      <div className="stat-item">
                         <span className="stat-label">Avg Detour</span>
                         <span className="stat-value">×{analysisSummary.avgDetourFactor.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="analysis-section">
-                    <div className="analysis-section-title">Operational Efficiency</div>
-                    <div className="analysis-summary-grid">
-                      <div className="stat-item">
-                        <span className="stat-label">Trips</span>
-                        <span className="stat-value">{analysisSummary.totalTrips}</span>
-                      </div>
-                      <div className="stat-item">
-                        <span className="stat-label">Distance</span>
-                        <span className="stat-value">{analysisSummary.totalDistance.toFixed(1)}</span>
-                      </div>
-                      <div className="stat-item">
-                        <span className="stat-label">Dist/Trip</span>
-                        <span className="stat-value">{analysisSummary.distancePerTrip.toFixed(1)}</span>
-                      </div>
-                      <div className="stat-item">
-                        <span className="stat-label">Served / Cancel</span>
-                        <span className="stat-value">
-                          {analysisSummary.servedPassengers}
-                          <span style={{ color: '#6b7280', margin: '0 2px' }}>/</span>
-                          <span style={{ color: analysisSummary.cancelledPassengers > 0 ? '#ef4444' : undefined }}>
-                            {analysisSummary.cancelledPassengers}
-                          </span>
-                        </span>
                       </div>
                     </div>
                   </div>

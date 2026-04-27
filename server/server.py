@@ -88,6 +88,7 @@ def extract_passenger(r):
         'requestTime': r.request_time,
         'pickupTime': r.pickup_at,
         'deliveryTime': r.dropoff_at,
+        'cancellationTime': r.cancel_at,
         'status': STATUS_MAP_REQ.get(r.status, 'waiting'),
         'assignedVehicleId': (r.assigned_v_id + 1) if r.assigned_v_id >= 0 else None,
     }
@@ -175,7 +176,11 @@ def build_state(environment):
         extract_passenger(r) for r in environment.done_request_list
         if r.status == RequestStatus.SERVED
     ]
-    visible_passengers = active_passengers + served_passengers
+    cancelled_passengers = [
+        extract_passenger(r) for r in environment.done_request_list
+        if r.status == RequestStatus.CANCELLED
+    ]
+    visible_passengers = active_passengers + served_passengers + cancelled_passengers
 
     return {
         'metrics': metrics,

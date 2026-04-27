@@ -36,6 +36,7 @@ export interface Passenger {
   requestTime: number;
   pickupTime: number | null;
   deliveryTime: number | null;
+  cancellationTime: number | null;
   status: PassengerStatus;
   assignedVehicleId: number | null;
 }
@@ -136,6 +137,12 @@ export interface EfficiencyDatum {
   carryingPct: number;
 }
 
+export interface VehicleTimelineDatum {
+  startTime: number;
+  endTime: number;
+  status: VehicleStatus;
+}
+
 export interface EdgeTraversal {
   from: number;
   to: number;
@@ -177,4 +184,5 @@ export interface VehicleAnalysis {
   waitTimeData: WaitTimeBarDatum[];
   detourFactorData: DetourFactorDatum[];
   efficiencyData: EfficiencyDatum[];
+  timelineData: VehicleTimelineDatum[];
 }

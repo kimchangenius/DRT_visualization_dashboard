@@ -767,6 +767,92 @@
   text-align: center;
 }
 
+/* ---- Vehicle Timeline Chart ---- */
+.vehicle-timeline-container {
+  display: flex;
+  align-items: stretch;
+}
+
+.vehicle-timeline {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 8px 4px;
+}
+
+.vehicle-timeline-track {
+  position: relative;
+  height: 42px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.vehicle-timeline-segment {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 8px;
+  color: #f8fafc;
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(15, 23, 42, 0.8);
+  white-space: nowrap;
+}
+
+.vehicle-timeline-segment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+}
+
+.vehicle-timeline-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #f8fafc;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.9);
+  transform: translateX(-1px);
+}
+
+.vehicle-timeline-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.vehicle-timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.62rem;
+}
+
+.vehicle-timeline-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.vehicle-timeline-legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
 /* ---- Operational Efficiency Chart ---- */
 .efficiency-chart-layout {
   display: flex;

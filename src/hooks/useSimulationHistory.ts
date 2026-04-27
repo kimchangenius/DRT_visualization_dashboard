@@ -11,6 +11,7 @@ import type {
   WaitTimeBarDatum,
   DetourFactorDatum,
   EfficiencyDatum,
+  VehicleTimelineDatum,
 } from '../types/simulation';
 import { shortestTravelTime } from '../data/siouxFallsNetwork';
 import { PLAYBACK_INTERVAL_MS } from '../config';
@@ -181,6 +182,8 @@ export function useSimulationHistory() {
     // --- Efficiency data (cumulative status breakdown per frame) ---
     const statusCounts = { idle: 0, picking_up: 0, carrying: 0 };
     const efficiencyData: EfficiencyDatum[] = [];
+    const timelineData: VehicleTimelineDatum[] = [];
+    let currentTimelineSegment: VehicleTimelineDatum | null = null;
     let prevTime = -1;
     for (const frame of frames) {
       const v = frame.vehicles.find(veh => veh.id === vid);
@@ -194,6 +197,14 @@ export function useSimulationHistory() {
       else if (v.status === 'carrying') statusCounts.carrying++;
       else statusCounts.idle++;
 
+      if (!currentTimelineSegment || currentTimelineSegment.status !== v.status) {
+        if (currentTimelineSegment) currentTimelineSegment.endTime = t;
+        currentTimelineSegment = { startTime: t, endTime: t, status: v.status };
+        timelineData.push(currentTimelineSegment);
+      } else {
+        currentTimelineSegment.endTime = t;
+      }
+
       const total = statusCounts.idle + statusCounts.picking_up + statusCounts.carrying;
       if (total > 0) {
         const idlePct = Math.round((statusCounts.idle / total) * 100);
@@ -201,6 +212,9 @@ export function useSimulationHistory() {
         const carryingPct = 100 - idlePct - pickupPct;
         efficiencyData.push({ time: t, idlePct, pickupPct, carryingPct });
       }
+    }
+    if (currentTimelineSegment) {
+      currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, currentTimelineSegment.startTime + 1);
     }
 
     // --- Snapshot at replay time (or earliest frame when replayTime is before first frame) ---
@@ -233,7 +247,9 @@ export function useSimulationHistory() {
       p => p.deliveryTime != null && p.deliveryTime <= replayTime,
     ).length;
     const cancelledPassengers = assignedPassengers.filter(
-      p => p.status === 'cancelled' && p.requestTime <= replayTime,
+      p =>
+        p.status === 'cancelled' &&
+        (p.cancellationTime ?? p.requestTime) <= replayTime,
     ).length;
     const replayWaitData = waitTimeData.filter(w => w.pickupTime <= replayTime);
     const waitTimes = replayWaitData.map(w => w.waitTime);
@@ -284,6 +300,7 @@ export function useSimulationHistory() {
       waitTimeData,
       detourFactorData,
       efficiencyData,
+      timelineData,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisVehicleId, frameCount, replayTime]);

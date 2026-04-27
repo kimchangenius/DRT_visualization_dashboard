@@ -182,6 +182,7 @@ class RideSharingEnvironment:
                 # waiting_time 초과 확인
                 if r.waiting_time >= cfg.MAX_WAIT_TIME:
                     r.status = RequestStatus.CANCELLED
+                    r.cancel_at = self.curr_time
                     cancelled_list.append(r)
             if r.status == RequestStatus.PICKEDUP:
                 r.in_vehicle_time = self.curr_time - r.pickup_at
