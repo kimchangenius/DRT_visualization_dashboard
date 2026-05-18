@@ -43,6 +43,13 @@ const STATUS_META: Record<VehicleStatus, { label: string; shortLabel: string; co
   repositioning: { label: 'Repositioning', shortLabel: 'R', color: '#94a3b8' },
 };
 
+const SERVICE_LINE = {
+  aServed: '#22c55e',
+  bServed: '#3b82f6',
+  aCancelled: '#ef4444',
+  bCancelled: '#f97316',
+};
+
 function frameAtOrBefore(frames: SimulationState[], time: number): SimulationState | null {
   if (frames.length === 0 || time < frames[0].metrics.currentTime) return null;
 
@@ -281,7 +288,7 @@ function VehiclePatternCard({
 
       <div className="vehicle-pattern-chart">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={serviceData} margin={{ top: 4, right: 10, left: -12, bottom: 0 }}>
+          <LineChart data={serviceData} margin={{ top: 4, right: 10, left: -12, bottom: 18 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
             <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} />
             <YAxis stroke="#94a3b8" fontSize={10} allowDecimals={false} />
@@ -290,14 +297,19 @@ function VehiclePatternCard({
               labelStyle={{ color: '#e2e8f0' }}
               labelFormatter={label => `t = ${label}`}
             />
-            <Legend wrapperStyle={{ fontSize: 10 }} />
+            <Legend
+              verticalAlign="bottom"
+              align="center"
+              height={22}
+              wrapperStyle={{ fontSize: 10, lineHeight: '14px' }}
+            />
             <Line
               type="monotone"
               dataKey="aServed"
               name="A Served"
-              stroke="#10b981"
-              strokeWidth={1.8}
-              dot={{ r: 1.5 }}
+              stroke={SERVICE_LINE.aServed}
+              strokeWidth={2}
+              dot={{ r: 1.7, fill: SERVICE_LINE.aServed }}
               activeDot={{ r: 3 }}
               isAnimationActive
               animationDuration={CHART_ANIMATION_DURATION_MS}
@@ -306,10 +318,9 @@ function VehiclePatternCard({
               type="monotone"
               dataKey="bServed"
               name="B Served"
-              stroke="#10b981"
-              strokeDasharray="5 4"
-              strokeWidth={1.8}
-              dot={{ r: 1.5 }}
+              stroke={SERVICE_LINE.bServed}
+              strokeWidth={2}
+              dot={{ r: 1.7, fill: SERVICE_LINE.bServed }}
               activeDot={{ r: 3 }}
               isAnimationActive
               animationDuration={CHART_ANIMATION_DURATION_MS}
@@ -318,9 +329,9 @@ function VehiclePatternCard({
               type="monotone"
               dataKey="aCancelled"
               name="A Cancel"
-              stroke="#ef4444"
-              strokeWidth={1.8}
-              dot={{ r: 1.5 }}
+              stroke={SERVICE_LINE.aCancelled}
+              strokeWidth={2}
+              dot={{ r: 1.7, fill: SERVICE_LINE.aCancelled }}
               activeDot={{ r: 3 }}
               isAnimationActive
               animationDuration={CHART_ANIMATION_DURATION_MS}
@@ -329,10 +340,10 @@ function VehiclePatternCard({
               type="monotone"
               dataKey="bCancelled"
               name="B Cancel"
-              stroke="#ef4444"
-              strokeDasharray="5 4"
-              strokeWidth={1.8}
-              dot={{ r: 1.5 }}
+              stroke={SERVICE_LINE.bCancelled}
+              strokeDasharray="6 3"
+              strokeWidth={2}
+              dot={{ r: 1.7, fill: SERVICE_LINE.bCancelled }}
               activeDot={{ r: 3 }}
               isAnimationActive
               animationDuration={CHART_ANIMATION_DURATION_MS}
