@@ -1169,11 +1169,12 @@
 }
 
 .vehicle-pattern-card {
-  min-height: 250px;
+  min-height: 278px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px;
+  overflow: hidden;
 }
 
 .vehicle-pattern-card-head {
@@ -1293,7 +1294,8 @@
 
 .vehicle-pattern-chart {
   flex: 1;
-  min-height: 112px;
+  min-height: 138px;
+  overflow: hidden;
 }
 
 .chart-empty {
