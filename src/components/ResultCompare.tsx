@@ -285,8 +285,13 @@ export default function ResultCompare() {
           </div>
         </div>
 
-        <div className="panel compare-controls-panel">
-          <h3 className="panel-title">Synchronized Replay</h3>
+        <div className="panel compare-controls-panel compare-replay-panel">
+          <div className="compare-replay-head">
+            <h3 className="panel-title">Synchronized Replay</h3>
+            <div className="replay-time-label">
+              t = {formatSimTime(currentTime)}
+            </div>
+          </div>
           <div className="compare-replay-controls">
             <button
               type="button"
@@ -306,9 +311,6 @@ export default function ResultCompare() {
               disabled={!canReplay}
               onChange={event => setCurrentTime(Number(event.target.value))}
             />
-          </div>
-          <div className="replay-time-label">
-            t = {formatSimTime(currentTime)}
           </div>
           <button
             type="button"
