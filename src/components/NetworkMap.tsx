@@ -10,6 +10,7 @@ import type {
 interface NetworkMapProps {
   vehicles: Vehicle[];
   passengers: Passenger[];
+  title?: string;
   analysisVehicleId?: number | null;
   edgeTraversals?: EdgeTraversal[];
   // nodeActivity?: NodeActivity[];  // Activity ring – disabled
@@ -156,6 +157,7 @@ const OD_LINE_COLOR = '#94a3b8';
 export default function NetworkMap({
   vehicles,
   passengers,
+  title,
   analysisVehicleId,
   edgeTraversals,
   // nodeActivity,  // Activity ring – disabled
@@ -236,7 +238,7 @@ export default function NetworkMap({
   return (
     <div className="panel network-panel">
       <h3 className="panel-title">
-        {inAnalysis ? `Analysis: Vehicle V${analysisVehicleId}` : 'Sioux Falls Network'}
+        {title ?? (inAnalysis ? `Analysis: Vehicle V${analysisVehicleId}` : 'Sioux Falls Network')}
       </h3>
       <div className="network-map-container">
         <svg
