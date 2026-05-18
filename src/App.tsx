@@ -13,10 +13,12 @@ import PassengerChart from './components/PassengerChart';
 import RequestStatusChart from './components/RequestStatusChart';
 import WaitTimeBarChart from './components/WaitTimeBarChart';
 import DetourFactorChart from './components/DetourFactorChart';
-import OperationalEfficiencyChart from './components/OperationalEfficiencyChart';
+import VehicleTimelineChart from './components/VehicleTimelineChart';
+import ResultCompare from './components/ResultCompare';
 import './App.css';
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'compare'>('dashboard');
   const history = useSimulationHistory();
 
   const onFrameConsumed = useCallback(
@@ -78,6 +80,26 @@ export default function App() {
 
   return (
     <div className="app">
+      <nav className="app-tabs" aria-label="Dashboard sections">
+        <button
+          type="button"
+          className={`app-tab${activeTab === 'dashboard' ? ' is-active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          Live Dashboard
+        </button>
+        <button
+          type="button"
+          className={`app-tab${activeTab === 'compare' ? ' is-active' : ''}`}
+          onClick={() => setActiveTab('compare')}
+        >
+          Result Compare
+        </button>
+      </nav>
+
+      {activeTab === 'compare' ? (
+        <ResultCompare />
+      ) : (
       <div className="dashboard-layout">
         <div className="dashboard-layout-left">
           <div className="dashboard-left-top">
@@ -158,9 +180,16 @@ export default function App() {
               <WaitTimeBarChart
                 data={history.analysis.waitTimeData}
                 maxWaitTime={state.maxWaitTime}
+                replayTime={history.replayTime}
               />
-              <DetourFactorChart data={history.analysis.detourFactorData} />
-              <OperationalEfficiencyChart data={history.analysis.efficiencyData} />
+              <DetourFactorChart
+                data={history.analysis.detourFactorData}
+                replayTime={history.replayTime}
+              />
+              <VehicleTimelineChart
+                data={history.analysis.timelineData}
+                replayTime={history.replayTime}
+              />
             </>
           ) : (
             <>
@@ -171,6 +200,7 @@ export default function App() {
           )}
         </aside>
       </div>
+      )}
     </div>
   );
 }

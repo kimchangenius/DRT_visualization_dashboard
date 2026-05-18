@@ -32,6 +32,7 @@ class Request:
         self.detour_time = -1
         self.pickup_at = None
         self.dropoff_at = None
+        self.cancel_at = None
 
     def __str__(self):
         return (f"<R>(id={self.id} / "
@@ -44,6 +45,7 @@ class Request:
                 f"odt={self.travel_time} / "
                 f"pt={self.pickup_at} / "
                 f"dt={self.dropoff_at} / "
+                f"ct={self.cancel_at} / "
                 f"p_due={self.pickup_due} / "
                 f"a_due={self.arrival_due})"
                 )

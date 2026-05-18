@@ -10,6 +10,7 @@ import type {
 interface NetworkMapProps {
   vehicles: Vehicle[];
   passengers: Passenger[];
+  title?: string;
   analysisVehicleId?: number | null;
   edgeTraversals?: EdgeTraversal[];
   // nodeActivity?: NodeActivity[];  // Activity ring – disabled
@@ -156,6 +157,7 @@ const OD_LINE_COLOR = '#94a3b8';
 export default function NetworkMap({
   vehicles,
   passengers,
+  title,
   analysisVehicleId,
   edgeTraversals,
   // nodeActivity,  // Activity ring – disabled
@@ -203,9 +205,15 @@ export default function NetworkMap({
     destColor: string;
   };
   const perPassengerMarkers = useMemo<PerPassengerMarker[]>(() => {
-    if (!inAnalysis) return [];
+    if (!inAnalysis || analysisVehicleId == null) return [];
     const markers: PerPassengerMarker[] = [];
     for (const p of passengers) {
+      const isUnaccepted = p.status === 'waiting' && p.assignedVehicleId == null;
+      const isOperatingBySelectedVehicle =
+        p.assignedVehicleId === analysisVehicleId &&
+        (p.status === 'waiting' || p.status === 'picked_up');
+      if (!isUnaccepted && !isOperatingBySelectedVehicle) continue;
+
       const oNode = nodeById.get(p.originNodeId);
       const dNode = nodeById.get(p.destinationNodeId);
       if (!oNode || !dNode) continue;
@@ -222,27 +230,15 @@ export default function NetworkMap({
           ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
           originColor: '#10b981', hasDest: true, destColor: '#10b981',
         });
-      } else if (p.status === 'delivered') {
-        markers.push({
-          id: p.id, status: 'delivered',
-          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
-          originColor: '#10b981', hasDest: true, destColor: '#10b981',
-        });
-      } else if (p.status === 'cancelled') {
-        markers.push({
-          id: p.id, status: 'cancelled',
-          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
-          originColor: PICKUP_COLOR, hasDest: true, destColor: '#ef4444',
-        });
       }
     }
     return markers;
-  }, [inAnalysis, passengers]);
+  }, [inAnalysis, analysisVehicleId, passengers]);
 
   return (
     <div className="panel network-panel">
       <h3 className="panel-title">
-        {inAnalysis ? `Analysis: Vehicle V${analysisVehicleId}` : 'Sioux Falls Network'}
+        {title ?? (inAnalysis ? `Analysis: Vehicle V${analysisVehicleId}` : 'Sioux Falls Network')}
       </h3>
       <div className="network-map-container">
         <svg

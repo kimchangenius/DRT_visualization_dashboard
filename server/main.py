@@ -1,15 +1,19 @@
 import os
 import csv
+import json
+from datetime import datetime, timezone
+
 import app.config as cfg
 from app.env_builder import EnvBuilder
 from app.agent import DQNAgent
 from app.request_status import RequestStatus
-from app.action_type import ActionType
+from app.state_builder import build_state, append_history_sample, sim_config_payload
 
 CURR_PATH = os.getcwd()
 DATA_PATH = os.path.join(CURR_PATH, 'data')
 RESULT_PATH = os.path.join(CURR_PATH, 'result')
 MODEL_PATH = os.path.join(DATA_PATH, 'hd256_bs32_lr1e-05.h5')
+REPLAY_FILENAME = 'simulation_replay.json'
 
 
 def run_inference(env_builder, model_path, result_dir=None):
@@ -23,6 +27,9 @@ def run_inference(env_builder, model_path, result_dir=None):
     env = env_builder.build()
     state = env.reset()
     total_reward = 0
+    utilization_history = []
+    passenger_history = []
+    frames = [build_state(env, utilization_history, passenger_history)]
 
     while True:
         while env.has_idle_vehicle():
@@ -37,10 +44,17 @@ def run_inference(env_builder, model_path, result_dir=None):
         env.handle_time_update()
 
         if env.is_done():
+            if env.curr_time % 2 == 0:
+                append_history_sample(env, utilization_history, passenger_history)
+            frames.append(build_state(env, utilization_history, passenger_history))
             break
 
         env.sync_state()
         state = env.state
+
+        if env.curr_time % 2 == 0:
+            append_history_sample(env, utilization_history, passenger_history)
+        frames.append(build_state(env, utilization_history, passenger_history))
 
     total_num_accept = 0
     total_num_serve = 0
@@ -77,8 +91,19 @@ def run_inference(env_builder, model_path, result_dir=None):
         w.writerow(['Request ID', 'Status', 'Waiting Time', 'In-Vehicle Time', 'Detour Time'])
         w.writerows(req_rows)
 
+    replay_path = os.path.join(result_dir, REPLAY_FILENAME)
+    with open(replay_path, 'w') as f:
+        json.dump({
+            'version': 1,
+            'generatedAt': datetime.now(timezone.utc).isoformat(),
+            'runName': os.path.basename(result_dir),
+            'config': sim_config_payload(),
+            'frames': frames,
+        }, f)
+
     print(f"Reward: {total_reward:.2f} | Served: {served_count} | "
           f"Avg Wait: {mean_wt:.2f} | Avg In-Vehicle: {mean_ivt:.2f}")
+    print(f"Replay JSON: {replay_path}")
 
 
 def main():

@@ -1,7 +1,6 @@
 import os
 import threading
 import time
-from collections import defaultdict
 
 from flask import Flask
 from flask_cors import CORS
@@ -10,8 +9,7 @@ from flask_socketio import SocketIO, emit
 import app.config as cfg
 from app.env_builder import EnvBuilder
 from app.agent import DQNAgent
-from app.vehicle_status import VehicleStatus
-from app.request_status import RequestStatus
+from app.state_builder import build_state, append_history_sample, sim_config_payload
 
 CURR_PATH = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(CURR_PATH, 'data')
@@ -36,161 +34,6 @@ utilization_history = []
 passenger_history = []
 
 
-# --------------- State Extraction ---------------
-
-STATUS_MAP_VEH = {
-    VehicleStatus.IDLE: 'idle',
-    VehicleStatus.REJECT: 'idle',
-    VehicleStatus.PICKUP: 'picking_up',
-    VehicleStatus.DROPOFF: 'carrying',
-}
-
-STATUS_MAP_REQ = {
-    RequestStatus.PENDING: 'waiting',
-    RequestStatus.ACCEPTED: 'waiting',
-    RequestStatus.PICKEDUP: 'picked_up',
-    RequestStatus.SERVED: 'delivered',
-    RequestStatus.CANCELLED: 'cancelled',
-}
-
-
-def extract_vehicle(v, environment):
-    status_str = STATUS_MAP_VEH.get(v.status, 'idle')
-
-    path = []
-    path_progress = 0
-    if v.status in (VehicleStatus.PICKUP, VehicleStatus.DROPOFF) and v.next_node > 0:
-        path = [v.curr_node, v.next_node]
-        total_dur = environment.network.get_duration(v.curr_node, v.next_node)
-        if total_dur > 0 and v.target_arrival_time > 0:
-            remaining = v.target_arrival_time - environment.curr_time
-            progress = 1.0 - (remaining / total_dur)
-            path_progress = max(0, min(1, progress))
-
-    return {
-        'id': v.id + 1,
-        'currentNodeId': v.curr_node,
-        'targetNodeId': v.next_node if v.next_node > 0 else None,
-        'path': path,
-        'pathProgress': round(path_progress, 2),
-        'status': status_str,
-        'passengerId': v.target_request.id if v.target_request else None,
-        'totalTrips': v.num_serve,
-        'totalDistance': 0,
-    }
-
-
-def extract_passenger(r):
-    return {
-        'id': r.id,
-        'originNodeId': r.from_node_id,
-        'destinationNodeId': r.to_node_id,
-        'requestTime': r.request_time,
-        'pickupTime': r.pickup_at,
-        'deliveryTime': r.dropoff_at,
-        'status': STATUS_MAP_REQ.get(r.status, 'waiting'),
-        'assignedVehicleId': (r.assigned_v_id + 1) if r.assigned_v_id >= 0 else None,
-    }
-
-
-def compute_metrics(environment):
-    served = [r for r in environment.done_request_list if r.status == RequestStatus.SERVED]
-    waiting = [r for r in environment.active_request_list
-               if r.status in (RequestStatus.PENDING, RequestStatus.ACCEPTED)]
-    in_transit = [r for r in environment.active_request_list
-                  if r.status == RequestStatus.PICKEDUP]
-    busy = [v for v in environment.vehicle_list if v.status not in (VehicleStatus.IDLE, VehicleStatus.REJECT)]
-
-    avg_wait = 0.0
-    if served:
-        avg_wait = sum(r.waiting_time for r in served) / len(served)
-
-    avg_travel = 0.0
-    if served:
-        avg_travel = sum(r.in_vehicle_time for r in served if r.in_vehicle_time > 0) / max(len(served), 1)
-
-    util = round(len(busy) / len(environment.vehicle_list) * 100) if environment.vehicle_list else 0
-    cancelled = sum(1 for r in environment.done_request_list if r.status == RequestStatus.CANCELLED)
-
-    return {
-        'currentTime': environment.curr_time,
-        'totalPassengersServed': len(served),
-        'totalPassengersWaiting': len(waiting),
-        'totalPassengersInTransit': len(in_transit),
-        'averageWaitTime': round(avg_wait, 1),
-        'averageTravelTime': round(avg_travel, 1),
-        'vehicleUtilization': util,
-        'cancelCount': cancelled,
-        'activeVehicles': len(busy),
-        'totalVehicles': len(environment.vehicle_list),
-    }
-
-
-def compute_wait_time_distribution(environment):
-    buckets = {'0-2': 0, '3-5': 0, '6-10': 0, '10+': 0}
-    for r in environment.done_request_list:
-        if r.status == RequestStatus.SERVED and r.waiting_time is not None:
-            wt = r.waiting_time
-            if wt <= 2:
-                buckets['0-2'] += 1
-            elif wt <= 5:
-                buckets['3-5'] += 1
-            elif wt <= 10:
-                buckets['6-10'] += 1
-            else:
-                buckets['10+'] += 1
-    return [{'range': k, 'count': v} for k, v in buckets.items()]
-
-
-def compute_request_status(environment):
-    served = sum(1 for r in environment.done_request_list if r.status == RequestStatus.SERVED)
-    in_transit = sum(1 for r in environment.active_request_list if r.status == RequestStatus.PICKEDUP)
-    waiting = sum(1 for r in environment.active_request_list
-                  if r.status in (RequestStatus.PENDING, RequestStatus.ACCEPTED))
-    cancelled = sum(1 for r in environment.done_request_list if r.status == RequestStatus.CANCELLED)
-    return [
-        {'name': 'Served', 'value': served, 'color': '#10b981'},
-        {'name': 'In vehicle', 'value': in_transit, 'color': '#3b82f6'},
-        {'name': 'Waiting', 'value': waiting, 'color': '#f59e0b'},
-        {'name': 'Cancelled', 'value': cancelled, 'color': '#ef4444'},
-    ]
-
-
-def compute_link_loads(environment):
-    loads = defaultdict(int)
-    for v in environment.vehicle_list:
-        if v.status in (VehicleStatus.PICKUP, VehicleStatus.DROPOFF) and v.next_node > 0:
-            loads[f'{v.curr_node}-{v.next_node}'] += 1
-    return dict(loads)
-
-
-def build_state(environment):
-    metrics = compute_metrics(environment)
-
-    visible_passengers = [
-        extract_passenger(r) for r in environment.active_request_list
-        if r.status in (RequestStatus.PENDING, RequestStatus.ACCEPTED, RequestStatus.PICKEDUP)
-    ]
-
-    return {
-        'metrics': metrics,
-        'maxNumVehicles': cfg.MAX_NUM_VEHICLES,
-        'vehCapacity': cfg.VEH_CAPACITY,
-        'maxNumRequest': cfg.MAX_NUM_REQUEST,
-        'maxWaitTime': cfg.MAX_WAIT_TIME,
-        'hiddenDim': cfg.HIDDEN_DIM,
-        'batchSize': cfg.BATCH_SIZE,
-        'learningRate': cfg.LEARNING_RATE,
-        'vehicles': [extract_vehicle(v, environment) for v in environment.vehicle_list],
-        'passengers': visible_passengers,
-        'waitTimeDistribution': compute_wait_time_distribution(environment),
-        'utilizationHistory': list(utilization_history),
-        'passengerHistory': list(passenger_history),
-        'requestStatusData': compute_request_status(environment),
-        'linkLoads': compute_link_loads(environment),
-    }
-
-
 # --------------- Simulation Loop ---------------
 
 def reset_simulation():
@@ -208,7 +51,7 @@ def simulation_loop():
         with env_lock:
             if env.is_done():
                 sim_running = False
-                socketio.emit('state', build_state(env))
+                socketio.emit('state', build_state(env, utilization_history, passenger_history))
                 socketio.emit('sim_done', {})
                 break
 
@@ -223,41 +66,13 @@ def simulation_loop():
             env.sync_state()
 
             if env.curr_time % 2 == 0:
-                m = compute_metrics(env)
-                utilization_history.append({
-                    'time': env.curr_time,
-                    'utilization': m['vehicleUtilization']
-                })
-                if len(utilization_history) > 200:
-                    utilization_history.pop(0)
-                passenger_history.append({
-                    'time': env.curr_time,
-                    'served': m['totalPassengersServed'],
-                    'waiting': m['totalPassengersWaiting'],
-                    'cancelled': m['cancelCount'],
-                })
-                if len(passenger_history) > 200:
-                    passenger_history.pop(0)
+                append_history_sample(env, utilization_history, passenger_history)
 
-            state = build_state(env)
+            state = build_state(env, utilization_history, passenger_history)
 
         socketio.emit('state', state)
         interval = max(0.05, 0.5 / sim_speed)
         time.sleep(interval)
-
-
-# --------------- SocketIO Events ---------------
-
-def sim_config_payload():
-    return {
-        'maxNumVehicles': cfg.MAX_NUM_VEHICLES,
-        'vehCapacity': cfg.VEH_CAPACITY,
-        'maxNumRequest': cfg.MAX_NUM_REQUEST,
-        'maxWaitTime': cfg.MAX_WAIT_TIME,
-        'hiddenDim': cfg.HIDDEN_DIM,
-        'batchSize': cfg.BATCH_SIZE,
-        'learningRate': cfg.LEARNING_RATE,
-    }
 
 
 @socketio.on('connect')
@@ -267,7 +82,7 @@ def handle_connect():
     if env is None:
         reset_simulation()
     with env_lock:
-        emit('state', build_state(env))
+        emit('state', build_state(env, utilization_history, passenger_history))
 
 
 @socketio.on('command')
@@ -294,7 +109,7 @@ def handle_command(data):
             sim_thread.join(timeout=2)
         reset_simulation()
         with env_lock:
-            emit('state', build_state(env))
+            emit('state', build_state(env, utilization_history, passenger_history))
 
     elif cmd == 'setSpeed':
         sim_speed = payload if payload else 1

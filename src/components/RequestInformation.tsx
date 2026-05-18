@@ -27,7 +27,11 @@ function statusLabel(s: Passenger['status']): string {
 
 export default function RequestInformation({ passengers, currentTime }: RequestInformationProps) {
   const rows = passengers
-    .filter(p => p.requestTime <= currentTime)
+    .filter(
+      p =>
+        p.requestTime <= currentTime &&
+        (p.status === 'waiting' || p.status === 'picked_up'),
+    )
     .slice()
     .sort((a, b) => a.requestTime - b.requestTime || a.id - b.id);
 

@@ -11,7 +11,7 @@ function statusLabel(s: Passenger['status']): string {
   switch (s) {
     case 'waiting': return 'Waiting';
     case 'picked_up': return 'In vehicle';
-    case 'delivered': return 'Delivered';
+    case 'delivered': return 'Served';
     case 'cancelled': return 'Cancelled';
     default: return s;
   }
@@ -50,7 +50,7 @@ export default function VehicleRequestOperation({
         {' · '}
         <span style={{ color: '#38bdf8' }}>{inVehicle} in vehicle</span>
         {' · '}
-        <span style={{ color: '#4ade80' }}>{served} delivered</span>
+        <span style={{ color: '#4ade80' }}>{served} served</span>
         {cancelled > 0 && (
           <>
             {' · '}
