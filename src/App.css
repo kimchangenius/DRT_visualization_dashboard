@@ -1181,8 +1181,8 @@
 }
 
 .temporal-comparison-section {
-  flex: 1 0 720px;
-  min-height: 720px;
+  flex: 1 0 540px;
+  min-height: 540px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1231,7 +1231,7 @@
 
 .temporal-chart-grid {
   flex: 1;
-  min-height: 700px;
+  min-height: 540px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: minmax(166px, 1fr);
@@ -1262,6 +1262,15 @@
 .temporal-chart-interaction {
   cursor: grab;
   user-select: none;
+  touch-action: none;
+  overscroll-behavior: contain;
+  -webkit-user-drag: none;
+  -webkit-app-region: no-drag;
+}
+
+.temporal-chart-interaction * {
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .temporal-chart-interaction.panning {
@@ -1366,9 +1375,9 @@
 
 .vehicle-pattern-row-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -1395,6 +1404,38 @@
   white-space: nowrap;
 }
 
+.vehicle-pattern-timeline-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 4px;
+}
+
+.vehicle-timeline-zoom-btn {
+  min-width: 22px;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.68);
+  color: var(--text-secondary);
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vehicle-timeline-zoom-btn:hover:not(:disabled) {
+  border-color: rgba(248, 250, 252, 0.42);
+  color: var(--text-primary);
+  background: rgba(51, 65, 85, 0.72);
+}
+
+.vehicle-timeline-zoom-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
 .vehicle-pattern-timeline-row {
   display: block;
   min-width: 0;
@@ -1408,6 +1449,21 @@
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 6px;
   background: rgba(15, 23, 42, 0.68);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  overscroll-behavior: contain;
+  -webkit-user-drag: none;
+  -webkit-app-region: no-drag;
+}
+
+.vehicle-pattern-track * {
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.vehicle-pattern-track.panning {
+  cursor: grabbing;
 }
 
 .vehicle-pattern-segment {

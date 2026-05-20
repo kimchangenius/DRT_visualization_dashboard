@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Vehicle, Passenger, VehicleAnalysisSummary } from '../types/simulation';
+import { formatSimTime } from '../utils/time';
 
 interface SimulationControlsProps {
   isRunning: boolean;
-  speed: number;
   maxNumVehicles: number;
   vehCapacity: number;
   maxNumRequest: number;
@@ -20,8 +20,6 @@ interface SimulationControlsProps {
   analysisVehicleId: number | null;
   analysisVehicleIds: number[];
   onSelectAnalysisVehicle: (id: number | null) => void;
-  analysisCurrentVehicle?: Vehicle | null;
-  analysisPassengers?: Passenger[];
   replayTime: number;
   onReplayTimeChange: (t: number) => void;
   isReplaying: boolean;
@@ -122,12 +120,6 @@ function waitSeverityColor(waitTime: number, threshold: number): string {
   return '#ef4444';
 }
 
-function formatSimTime(t: number): string {
-  const h = Math.floor(t / 60);
-  const m = t % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
 export default function SimulationControls({
   isRunning,
   maxNumVehicles,
@@ -145,8 +137,6 @@ export default function SimulationControls({
   analysisVehicleId,
   analysisVehicleIds,
   onSelectAnalysisVehicle,
-  analysisCurrentVehicle,
-  analysisPassengers = [],
   replayTime,
   onReplayTimeChange,
   isReplaying,

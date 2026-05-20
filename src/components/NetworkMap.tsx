@@ -5,6 +5,7 @@ import type {
   Passenger,
   EdgeTraversal,
   VehiclePatternSelection,
+  SimulationState,
   // NodeActivity,  // Activity ring – disabled
 } from '../types/simulation';
 
@@ -15,9 +16,9 @@ interface NetworkMapProps {
   analysisVehicleId?: number | null;
   edgeTraversals?: EdgeTraversal[];
   selectedSegment?: VehiclePatternSelection | null;
+  selectedSegmentFrames?: SimulationState[];
   onClearSelectedSegment?: () => void;
   // nodeActivity?: NodeActivity[];  // Activity ring – disabled
-  maxWaitTimeThreshold?: number;
 }
 
 const PADDING = 10;
@@ -125,6 +126,99 @@ function buildMovingLinkColors(vehicles: Vehicle[]): Map<string, string[]> {
   return map;
 }
 
+function routeNodeIdsForVehicle(vehicle: Vehicle): number[] {
+  if (vehicle.path.length >= 2) {
+    if (vehicle.path.length > 2) return vehicle.path;
+    const route = shortestPathOnGraph(vehicle.path[0], vehicle.path[1]);
+    return route && route.length >= 2 ? route : vehicle.path;
+  }
+
+  if (vehicle.targetNodeId != null) {
+    return shortestPathOnGraph(vehicle.currentNodeId, vehicle.targetNodeId) ?? [
+      vehicle.currentNodeId,
+      vehicle.targetNodeId,
+    ];
+  }
+
+  return [vehicle.currentNodeId];
+}
+
+function appendRouteNodes(target: number[], route: number[]) {
+  if (route.length === 0) return;
+
+  const tailStart = target.length - route.length;
+  const routeAlreadyAtTail = tailStart >= 0 && route.every(
+    (nodeId, index) => target[tailStart + index] === nodeId,
+  );
+  if (routeAlreadyAtTail) return;
+
+  for (const nodeId of route) {
+    if (target[target.length - 1] !== nodeId) target.push(nodeId);
+  }
+}
+
+function buildSegmentMovingLinkColors(
+  frames: SimulationState[],
+  selection: VehiclePatternSelection,
+): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  const color = vehicleColor(selection.status);
+
+  for (const frame of frames) {
+    const vehicle = frame.vehicles.find(v => v.id === selection.vehicleId);
+    if (!vehicle || vehicle.status !== selection.status) continue;
+
+    const route = routeNodeIdsForVehicle(vehicle);
+    for (let i = 0; i < route.length - 1; i++) {
+      const key = normalizeEdgeKey(route[i], route[i + 1]);
+      if (!map.has(key)) map.set(key, [color]);
+    }
+  }
+
+  return map;
+}
+
+function buildSegmentRouteNodeIds(
+  frames: SimulationState[],
+  selection: VehiclePatternSelection,
+): number[] {
+  const routeNodes: number[] = [];
+
+  for (const frame of frames) {
+    const vehicle = frame.vehicles.find(v => v.id === selection.vehicleId);
+    if (!vehicle || vehicle.status !== selection.status) continue;
+    appendRouteNodes(routeNodes, routeNodeIdsForVehicle(vehicle));
+  }
+
+  return routeNodes;
+}
+
+function passengerMatchesSelection(
+  passenger: Passenger,
+  selection: VehiclePatternSelection,
+): boolean {
+  if (passenger.assignedVehicleId !== selection.vehicleId) return false;
+  if (selection.status === 'picking_up') return passenger.status === 'waiting';
+  return passenger.status === 'picked_up';
+}
+
+function collectSegmentPassengers(
+  frames: SimulationState[],
+  selection: VehiclePatternSelection,
+): Passenger[] {
+  const byId = new Map<number, Passenger>();
+
+  for (const frame of frames) {
+    for (const passenger of frame.passengers) {
+      if (passengerMatchesSelection(passenger, selection)) {
+        byId.set(passenger.id, passenger);
+      }
+    }
+  }
+
+  return Array.from(byId.values()).sort((a, b) => a.id - b.id);
+}
+
 function getVehiclePosition(v: Vehicle) {
   if (v.path.length >= 2) {
     const t = Math.min(1, Math.max(0, v.pathProgress));
@@ -164,14 +258,41 @@ export default function NetworkMap({
   analysisVehicleId,
   edgeTraversals,
   selectedSegment,
+  selectedSegmentFrames,
   onClearSelectedSegment,
   // nodeActivity,  // Activity ring – disabled
-  maxWaitTimeThreshold = 10,
 }: NetworkMapProps) {
   const inAnalysis = analysisVehicleId != null;
   const selectedVehicleId = selectedSegment?.vehicleId ?? null;
   const focusedVehicleId = analysisVehicleId ?? selectedVehicleId;
   const hasTimelineSelection = selectedSegment != null;
+  const activeSegmentFrames = selectedSegment ? (selectedSegmentFrames ?? []) : [];
+
+  const selectedSegmentRouteNodes = useMemo(() => {
+    if (!selectedSegment || activeSegmentFrames.length === 0) return [];
+    return buildSegmentRouteNodeIds(activeSegmentFrames, selectedSegment);
+  }, [activeSegmentFrames, selectedSegment]);
+
+  const selectedPassengers = useMemo(() => {
+    if (!selectedSegment) return [];
+    if (activeSegmentFrames.length > 0) {
+      return collectSegmentPassengers(activeSegmentFrames, selectedSegment);
+    }
+    return passengers.filter(passenger =>
+      passenger.assignedVehicleId === selectedSegment.vehicleId &&
+      (passenger.status === 'waiting' || passenger.status === 'picked_up'),
+    );
+  }, [activeSegmentFrames, passengers, selectedSegment]);
+
+  const selectedVehicleSource = activeSegmentFrames[0]?.vehicles ?? vehicles;
+  const selectedVehicle = selectedSegment
+    ? selectedVehicleSource.find(vehicle => vehicle.id === selectedSegment.vehicleId) ?? null
+    : null;
+  const selectedNodeLabel = selectedSegmentRouteNodes.length > 0
+    ? selectedSegmentRouteNodes.join(' -> ')
+    : selectedVehicle
+      ? `${selectedVehicle.currentNodeId}${selectedVehicle.targetNodeId != null ? ` -> ${selectedVehicle.targetNodeId}` : ''}`
+      : '-';
 
   const waitingByNode = new Map<number, number>();
   for (const p of passengers) {
@@ -181,12 +302,15 @@ export default function NetworkMap({
   }
 
   const movingLinkColors = useMemo(() => {
+    if (selectedSegment && activeSegmentFrames.length > 0) {
+      return buildSegmentMovingLinkColors(activeSegmentFrames, selectedSegment);
+    }
     if (focusedVehicleId != null) {
       const selected = vehicles.filter(v => v.id === focusedVehicleId);
       return buildMovingLinkColors(selected);
     }
     return buildMovingLinkColors(vehicles);
-  }, [vehicles, focusedVehicleId]);
+  }, [activeSegmentFrames, vehicles, focusedVehicleId, selectedSegment]);
 
   // // Node activity lookup (Activity ring – disabled)
   // const nodeActivityById = useMemo(() => {
@@ -215,8 +339,9 @@ export default function NetworkMap({
   const perPassengerMarkers = useMemo<PerPassengerMarker[]>(() => {
     if (focusedVehicleId == null) return [];
     const markers: PerPassengerMarker[] = [];
-    for (const p of passengers) {
-      const isUnaccepted = inAnalysis && p.status === 'waiting' && p.assignedVehicleId == null;
+    const markerPassengers = hasTimelineSelection ? selectedPassengers : passengers;
+    for (const p of markerPassengers) {
+      const isUnaccepted = !hasTimelineSelection && inAnalysis && p.status === 'waiting' && p.assignedVehicleId == null;
       const isOperatingBySelectedVehicle =
         p.assignedVehicleId === focusedVehicleId &&
         (p.status === 'waiting' || p.status === 'picked_up');
@@ -241,17 +366,7 @@ export default function NetworkMap({
       }
     }
     return markers;
-  }, [inAnalysis, focusedVehicleId, passengers]);
-
-  const selectedVehicle = selectedSegment
-    ? vehicles.find(vehicle => vehicle.id === selectedSegment.vehicleId) ?? null
-    : null;
-  const selectedPassengers = selectedSegment
-    ? passengers.filter(passenger =>
-        passenger.assignedVehicleId === selectedSegment.vehicleId &&
-        (passenger.status === 'waiting' || passenger.status === 'picked_up'),
-      )
-    : [];
+  }, [hasTimelineSelection, inAnalysis, focusedVehicleId, passengers, selectedPassengers]);
 
   return (
     <div className="panel network-panel">
@@ -329,7 +444,7 @@ export default function NetworkMap({
           })}
 
           {/* OD pair connection lines (dashed, behind markers) */}
-          {inAnalysis && perPassengerMarkers.map(m => (
+          {(inAnalysis || hasTimelineSelection) && perPassengerMarkers.map(m => (
             <line
               key={`od-${m.id}`}
               x1={m.ox} y1={m.oy}
@@ -378,7 +493,7 @@ export default function NetworkMap({
           })}
 
           {/* Per-passenger request markers (analysis) */}
-          {inAnalysis && perPassengerMarkers.map(m => {
+          {(inAnalysis || hasTimelineSelection) && perPassengerMarkers.map(m => {
             const s = 4;
             return (
               <g key={`req-${m.id}`}>
@@ -493,7 +608,7 @@ export default function NetworkMap({
               <span>Time</span>
               <strong>t {selectedSegment.startTime}-{selectedSegment.endTime}</strong>
               <span>Node</span>
-              <strong>{selectedVehicle.currentNodeId}{selectedVehicle.targetNodeId != null ? ` -> ${selectedVehicle.targetNodeId}` : ''}</strong>
+              <strong>{selectedNodeLabel}</strong>
               <span>Passenger</span>
               <strong>{selectedPassengers.length > 0 ? selectedPassengers.map(p => `P${p.id}`).join(', ') : '-'}</strong>
             </div>
@@ -501,7 +616,7 @@ export default function NetworkMap({
         )}
 
         <div className="map-legend">
-          {inAnalysis ? (
+          {inAnalysis || hasTimelineSelection ? (
             <>
               <div className="legend-item">
                 <span className="legend-dot" style={{ background: '#3b82f6' }} /> Idle
@@ -519,7 +634,7 @@ export default function NetworkMap({
                 <span className="legend-triangle-down" style={{ borderTopColor: '#10b981' }} /> P: Picked up
               </div>
               <div className="legend-item">
-                <span className="legend-triangle-up" style={{ borderBottomColor: '#10b981' }} /> D: Dropoff
+                <span className="legend-triangle-up" style={{ borderBottomColor: DROPOFF_COLOR }} /> D: Dropoff
               </div>
               <div className="legend-item">
                 <span className="legend-triangle-up" style={{ borderBottomColor: '#ef4444' }} /> D: Cancelled

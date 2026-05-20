@@ -33,7 +33,6 @@ export default function App() {
     connectionStatus,
     reconnectAttempt,
     isRunning,
-    speed,
     start,
     stop,
     reset: wsReset,
@@ -118,7 +117,6 @@ export default function App() {
             <aside className="dashboard-left-controls">
               <SimulationControls
                 isRunning={isRunning}
-                speed={speed}
                 maxNumVehicles={state.maxNumVehicles}
                 vehCapacity={state.vehCapacity}
                 maxNumRequest={state.maxNumRequest}
@@ -135,8 +133,6 @@ export default function App() {
                 analysisVehicleId={history.analysisVehicleId}
                 analysisVehicleIds={history.vehicleIds}
                 onSelectAnalysisVehicle={history.selectVehicle}
-                analysisCurrentVehicle={history.analysis?.currentVehicle}
-                analysisPassengers={history.analysis?.assignedPassengers}
                 replayTime={history.replayTime}
                 onReplayTimeChange={history.setReplayTime}
                 isReplaying={history.isReplaying}
@@ -160,7 +156,6 @@ export default function App() {
                 analysisVehicleId={analysisActive ? history.analysisVehicleId : undefined}
                 edgeTraversals={analysisActive ? history.analysis?.edgeTraversals : undefined}
                 // nodeActivity={analysisActive ? history.analysis?.nodeActivity : undefined}  // Activity ring – disabled
-                maxWaitTimeThreshold={state.maxWaitTime}
               />
             </section>
           </div>

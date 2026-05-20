@@ -15,6 +15,7 @@ import type {
 } from '../types/simulation';
 import { shortestTravelTime } from '../data/siouxFallsNetwork';
 import { PLAYBACK_INTERVAL_MS } from '../config';
+import { frameAtOrBefore } from '../utils/replay';
 
 export function useSimulationHistory() {
   const framesRef = useRef<SimulationState[]>([]);
@@ -86,8 +87,6 @@ export function useSimulationHistory() {
     const frames = framesRef.current;
     const firstFrame = frames[0];
     const vid = analysisVehicleId;
-    const lastFrame = frames[frames.length - 1];
-
     // --- Collect all passengers ever assigned to this vehicle ---
     const passengerMap = new Map<number, Passenger>();
     for (const frame of frames) {
@@ -218,29 +217,13 @@ export function useSimulationHistory() {
     }
 
     // --- Snapshot at replay time (or earliest frame when replayTime is before first frame) ---
-    let metricsFrame = firstFrame;
-    for (const frame of frames) {
-      if (frame.metrics.currentTime <= replayTime) {
-        metricsFrame = frame;
-      } else {
-        break;
-      }
-    }
-    const metrics: SimulationMetrics = metricsFrame.metrics;
+    const replayFrame = frameAtOrBefore(frames, replayTime) ?? firstFrame;
+    const metrics: SimulationMetrics = replayFrame.metrics;
 
     // --- Vehicles & passengers snapshot at replay time ---
-    let replayVehicles: Vehicle[] = firstFrame.vehicles;
-    let replayPassengers: Passenger[] = firstFrame.passengers;
-    let currentVehicle: Vehicle | null = firstFrame.vehicles.find(veh => veh.id === vid) ?? null;
-    for (const frame of frames) {
-      if (frame.metrics.currentTime <= replayTime) {
-        replayVehicles = frame.vehicles;
-        replayPassengers = frame.passengers;
-        currentVehicle = frame.vehicles.find(veh => veh.id === vid) ?? null;
-      } else {
-        break;
-      }
-    }
+    const replayVehicles: Vehicle[] = replayFrame.vehicles;
+    const replayPassengers: Passenger[] = replayFrame.passengers;
+    const currentVehicle: Vehicle | null = replayFrame.vehicles.find(veh => veh.id === vid) ?? null;
 
     // --- Summary stats (up to replay time) ---
     const servedPassengers = assignedPassengers.filter(

@@ -9,14 +9,19 @@ import {
   YAxis,
 } from 'recharts';
 import { useMemo, useRef, useState } from 'react';
-import type { MouseEvent, ReactNode, WheelEvent } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 
 import {
-  COMPARISON_CHART_ANIMATION_DURATION_MS,
   RESULT_A_COLOR,
   RESULT_B_COLOR,
 } from '../config';
 import type { SimulationState } from '../types/simulation';
+import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
+import type { NonPassiveWheelEvent } from '../hooks/useNonPassiveWheel';
+import { clampDomain, domainFromValues, zoomDomain } from '../utils/domain';
+import type { NumericDomain } from '../utils/domain';
+import { formatNumber } from '../utils/time';
+import { frameAtOrBefore } from '../utils/replay';
 
 interface ReplayTemporalSource {
   frames: SimulationState[];
@@ -38,10 +43,10 @@ interface TemporalComparisonPoint {
   bCancelled?: number;
   aInTransit?: number;
   bInTransit?: number;
-  aUtilization?: number;
-  bUtilization?: number;
-  aActiveVehicles?: number;
-  bActiveVehicles?: number;
+  // aUtilization?: number;
+  // bUtilization?: number;
+  // aActiveVehicles?: number;
+  // bActiveVehicles?: number;
   aAverageWaitTime?: number;
   bAverageWaitTime?: number;
   aAverageTravelTime?: number;
@@ -56,11 +61,9 @@ interface TemporalMetricConfig {
   domain?: [number, number];
 }
 
-type ZoomDomain = [number, number];
+type ZoomDomain = NumericDomain;
 type ZoomDomains = Record<string, ZoomDomain | null | undefined>;
-
-const RESULT_A_DASH = undefined;
-const RESULT_B_DASH = undefined;
+type ChartWheelEvent = NonPassiveWheelEvent<HTMLDivElement>;
 
 const TEMPORAL_METRICS: TemporalMetricConfig[] = [
   {
@@ -87,18 +90,18 @@ const TEMPORAL_METRICS: TemporalMetricConfig[] = [
     bKey: 'bInTransit',
     allowDecimals: false,
   },
-  {
-    title: 'Vehicle Utilization (%)',
-    aKey: 'aUtilization',
-    bKey: 'bUtilization',
-    domain: [0, 100],
-  },
-  {
-    title: 'Active Vehicles',
-    aKey: 'aActiveVehicles',
-    bKey: 'bActiveVehicles',
-    allowDecimals: false,
-  },
+  // {
+  //   title: 'Vehicle Utilization (%)',
+  //   aKey: 'aUtilization',
+  //   bKey: 'bUtilization',
+  //   domain: [0, 100],
+  // },
+  // {
+  //   title: 'Active Vehicles',
+  //   aKey: 'aActiveVehicles',
+  //   bKey: 'bActiveVehicles',
+  //   allowDecimals: false,
+  // },
   {
     title: 'Average Wait Time',
     aKey: 'aAverageWaitTime',
@@ -110,20 +113,6 @@ const TEMPORAL_METRICS: TemporalMetricConfig[] = [
     bKey: 'bAverageTravelTime',
   },
 ];
-
-function frameAtOrBefore(frames: SimulationState[], time: number): SimulationState | null {
-  if (frames.length === 0 || time < frames[0].metrics.currentTime) return null;
-
-  let selected = frames[0];
-  for (const frame of frames) {
-    if (frame.metrics.currentTime <= time) {
-      selected = frame;
-    } else {
-      break;
-    }
-  }
-  return selected;
-}
 
 function appendMetrics(
   point: TemporalComparisonPoint,
@@ -138,8 +127,8 @@ function appendMetrics(
   point[key('Waiting')] = metrics.totalPassengersWaiting;
   point[key('Cancelled')] = metrics.cancelCount;
   point[key('InTransit')] = metrics.totalPassengersInTransit;
-  point[key('Utilization')] = metrics.vehicleUtilization;
-  point[key('ActiveVehicles')] = metrics.activeVehicles;
+  // point[key('Utilization')] = metrics.vehicleUtilization;
+  // point[key('ActiveVehicles')] = metrics.activeVehicles;
   point[key('AverageWaitTime')] = metrics.averageWaitTime;
   point[key('AverageTravelTime')] = metrics.averageTravelTime;
 }
@@ -160,38 +149,6 @@ function buildTemporalComparisonData(
       appendMetrics(point, 'b', resultB ? frameAtOrBefore(resultB.frames, time) : null);
       return point;
     });
-}
-
-function formatNumber(value: number | undefined, digits = 1): string {
-  if (value == null || !Number.isFinite(value)) return '-';
-  return Number.isInteger(value) ? String(value) : value.toFixed(digits);
-}
-
-function boundsFromData(data: TemporalComparisonPoint[]): ZoomDomain {
-  if (data.length === 0) return [0, 1];
-  const times = data.map(point => point.time);
-  const min = Math.min(...times);
-  const max = Math.max(...times);
-  return min === max ? [min, min + 1] : [min, max];
-}
-
-function clampDomain(domain: ZoomDomain, bounds: ZoomDomain): ZoomDomain {
-  const [min, max] = bounds;
-  const fullRange = Math.max(1, max - min);
-  const range = Math.min(fullRange, Math.max(1, domain[1] - domain[0]));
-  let start = domain[0];
-  let end = start + range;
-
-  if (start < min) {
-    start = min;
-    end = start + range;
-  }
-  if (end > max) {
-    end = max;
-    start = end - range;
-  }
-
-  return [Math.max(min, start), Math.min(max, end)];
 }
 
 function TemporalChart({
@@ -218,12 +175,10 @@ function renderComparisonLine({
   dataKey,
   name,
   color,
-  dash,
 }: {
   dataKey: keyof TemporalComparisonPoint;
   name: string;
   color: string;
-  dash?: string;
 }) {
   return (
     <Line
@@ -233,13 +188,10 @@ function renderComparisonLine({
       yAxisId="left"
       stroke={color}
       strokeWidth={2}
-      strokeDasharray={dash}
       dot={false}
       activeDot={false}
       connectNulls={false}
-      isAnimationActive
-      animationDuration={COMPARISON_CHART_ANIMATION_DURATION_MS}
-      animationEasing="ease-out"
+      isAnimationActive={false}
     />
   );
 }
@@ -296,11 +248,37 @@ function MetricTemporalChart({
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetZoom: () => void;
-  onWheel: (event: WheelEvent<HTMLDivElement>) => void;
+  onWheel: (event: ChartWheelEvent) => void;
   onMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
   onMouseMove: (event: MouseEvent<HTMLDivElement>) => void;
   onMouseUp: () => void;
 }) {
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  useNonPassiveWheel(chartRef, onWheel);
+
+  const handleChartMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onMouseDown(event);
+  };
+
+  const handleChartMouseMove = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onMouseMove(event);
+  };
+
+  const handleChartMouseUp = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onMouseUp();
+  };
+
+  const handleChartDragStart = (event: MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const actions = (
     <div className="temporal-chart-actions" aria-label={`${metric.title} zoom controls`}>
       <button
@@ -333,12 +311,13 @@ function MetricTemporalChart({
   return (
     <TemporalChart title={metric.title} actions={actions}>
       <div
+        ref={chartRef}
         className={`temporal-chart-container temporal-chart-interaction${isPanning ? ' panning' : ''}`}
-        onWheel={onWheel}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onMouseLeave={onMouseUp}
+        onMouseDown={handleChartMouseDown}
+        onMouseMove={handleChartMouseMove}
+        onMouseUp={handleChartMouseUp}
+        onMouseLeave={handleChartMouseUp}
+        onDragStart={handleChartDragStart}
       >
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 4, right: 10, left: -10, bottom: 0 }}>
@@ -364,13 +343,11 @@ function MetricTemporalChart({
               dataKey: metric.aKey,
               name: 'Result A',
               color: RESULT_A_COLOR,
-              dash: RESULT_A_DASH,
             })}
             {renderComparisonLine({
               dataKey: metric.bKey,
               name: 'Result B',
               color: RESULT_B_COLOR,
-              dash: RESULT_B_DASH,
             })}
           </LineChart>
         </ResponsiveContainer>
@@ -390,7 +367,7 @@ export default function TemporalComparisonCharts({
     ? visibleData
     : data.slice(0, Math.min(1, data.length));
   const hasData = data.length > 0;
-  const fullDomain = useMemo(() => boundsFromData(chartData), [chartData]);
+  const fullDomain = useMemo(() => domainFromValues(chartData.map(point => point.time)), [chartData]);
   const [zoomDomains, setZoomDomains] = useState<ZoomDomains>({});
   const [panningMetric, setPanningMetric] = useState<string | null>(null);
   const panStartRef = useRef<{ metricTitle: string; x: number; domain: ZoomDomain } | null>(null);
@@ -402,33 +379,20 @@ export default function TemporalComparisonCharts({
 
   const zoomMetric = (metricTitle: string, factor: number, anchorRatio = 0.5) => {
     if (!canInteract) return;
-    setZoomDomains(prev => {
-      const activeDomain = clampDomain(prev[metricTitle] ?? fullDomain, fullDomain);
-      const fullRange = Math.max(1, fullDomain[1] - fullDomain[0]);
-      const activeRange = Math.max(1, activeDomain[1] - activeDomain[0]);
-      const minRange = Math.min(fullRange, Math.max(1, Math.round(fullRange * 0.08)));
-      const nextRange = Math.min(fullRange, Math.max(minRange, activeRange * factor));
-
-      if (nextRange >= fullRange) return { ...prev, [metricTitle]: null };
-
-      const center = activeDomain[0] + activeRange * anchorRatio;
-      return {
-        ...prev,
-        [metricTitle]: clampDomain(
-          [center - nextRange * anchorRatio, center + nextRange * (1 - anchorRatio)],
-          fullDomain,
-        ),
-      };
-    });
+    setZoomDomains(prev => ({
+      ...prev,
+      [metricTitle]: zoomDomain(prev[metricTitle], fullDomain, factor, anchorRatio),
+    }));
   };
 
   const resetMetricZoom = (metricTitle: string) => {
     setZoomDomains(prev => ({ ...prev, [metricTitle]: null }));
   };
 
-  const handleWheel = (metricTitle: string) => (event: WheelEvent<HTMLDivElement>) => {
+  const handleWheel = (metricTitle: string) => (event: ChartWheelEvent) => {
     if (!canInteract) return;
     event.preventDefault();
+    event.stopPropagation();
     const rect = event.currentTarget.getBoundingClientRect();
     const ratio = rect.width > 0
       ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))

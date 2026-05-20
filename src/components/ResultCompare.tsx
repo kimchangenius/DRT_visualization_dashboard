@@ -5,6 +5,8 @@ import TemporalComparisonCharts from './TemporalComparisonCharts';
 import VehicleTemporalComparisonCharts from './VehicleTemporalComparisonCharts';
 import { PLAYBACK_INTERVAL_MS, RESULT_A_COLOR, RESULT_B_COLOR } from '../config';
 import type { SimulationMetrics, SimulationState, VehiclePatternSelection } from '../types/simulation';
+import { formatSimTime } from '../utils/time';
+import { frameAtOrBefore, framesBetween } from '../utils/replay';
 
 interface LoadedReplay {
   name: string;
@@ -113,23 +115,17 @@ function parseReplayPayload(payload: unknown, fileName: string): LoadedReplay {
   };
 }
 
-function frameAtTime(replay: LoadedReplay | null, time: number): SimulationState | null {
-  if (!replay) return null;
-  let selected = replay.frames[0];
-  for (const frame of replay.frames) {
-    if (frame.metrics.currentTime <= time) {
-      selected = frame;
-    } else {
-      break;
-    }
-  }
-  return selected;
-}
+function framesForSegment(
+  replay: LoadedReplay | null,
+  selection: VehiclePatternSelection | null,
+): SimulationState[] {
+  if (!replay || !selection) return [];
 
-function formatSimTime(t: number): string {
-  const h = Math.floor(t / 60);
-  const m = t % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  const frames = framesBetween(replay.frames, selection.startTime, selection.endTime);
+  if (frames.length > 0) return frames;
+
+  const fallback = frameAtOrBefore(replay.frames, selection.startTime);
+  return fallback ? [fallback] : [];
 }
 
 function ReplayUpload({
@@ -190,7 +186,11 @@ function ResultMapPanel({
   selectedSegment: VehiclePatternSelection | null;
   onClearSelectedSegment: () => void;
 }) {
-  if (!replay || !frame) {
+  const activeSelectedSegment = selectedSegment?.resultSide === side ? selectedSegment : null;
+  const selectedSegmentFrames = framesForSegment(replay, activeSelectedSegment);
+  const displayFrame = selectedSegmentFrames[0] ?? frame;
+
+  if (!replay || !displayFrame) {
     return (
       <section className="compare-map-slot">
         <div className="panel compare-empty-panel">
@@ -205,10 +205,10 @@ function ResultMapPanel({
     <section className="compare-map-slot">
       <NetworkMap
         title={SIDE_LABEL[side]}
-        vehicles={frame.vehicles}
-        passengers={frame.passengers}
-        maxWaitTimeThreshold={frame.maxWaitTime}
-        selectedSegment={selectedSegment?.resultSide === side ? selectedSegment : null}
+        vehicles={displayFrame.vehicles}
+        passengers={displayFrame.passengers}
+        selectedSegment={activeSelectedSegment}
+        selectedSegmentFrames={selectedSegmentFrames}
         onClearSelectedSegment={onClearSelectedSegment}
       />
     </section>
@@ -280,8 +280,8 @@ export default function ResultCompare() {
     };
   }, [loadedReplays]);
 
-  const leftFrame = useMemo(() => frameAtTime(leftReplay, currentTime), [leftReplay, currentTime]);
-  const rightFrame = useMemo(() => frameAtTime(rightReplay, currentTime), [rightReplay, currentTime]);
+  const leftFrame = useMemo(() => leftReplay ? frameAtOrBefore(leftReplay.frames, currentTime) : null, [leftReplay, currentTime]);
+  const rightFrame = useMemo(() => rightReplay ? frameAtOrBefore(rightReplay.frames, currentTime) : null, [rightReplay, currentTime]);
 
   const loadFile = useCallback((side: ReplaySide, file: File) => {
     const reader = new FileReader();
@@ -316,6 +316,10 @@ export default function ResultCompare() {
   }, [loadedReplays.length, timeRange.min, timeRange.max]);
 
   useEffect(() => {
+    if (isPlaying) setSelectedVehicleSegment(null);
+  }, [isPlaying]);
+
+  useEffect(() => {
     if (!isPlaying || loadedReplays.length === 0) return;
     intervalRef.current = setInterval(() => {
       setCurrentTime(prev => {
@@ -339,8 +343,6 @@ export default function ResultCompare() {
 
   const handleSelectVehicleSegment = useCallback((selection: VehiclePatternSelection) => {
     setSelectedVehicleSegment(selection);
-    setCurrentTime(selection.startTime);
-    setIsPlaying(false);
   }, []);
 
   return (
