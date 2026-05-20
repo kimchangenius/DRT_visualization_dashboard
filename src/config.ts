@@ -10,3 +10,8 @@ export function getWsUrl(): string {
 export const PLAYBACK_INTERVAL_MS = 1000;
 
 export const CHART_ANIMATION_DURATION_MS = Math.round(PLAYBACK_INTERVAL_MS * 0.75);
+
+export const COMPARISON_CHART_ANIMATION_DURATION_MS = 600;
+
+export const RESULT_A_COLOR = '#f59e0b';
+export const RESULT_B_COLOR = '#3b82f6';

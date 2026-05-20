@@ -97,10 +97,11 @@ export default function App() {
         </button>
       </nav>
 
-      {activeTab === 'compare' ? (
-        <ResultCompare />
-      ) : (
-      <div className="dashboard-layout">
+      <section
+        className={`app-tab-panel${activeTab === 'dashboard' ? ' is-active' : ''}`}
+        aria-hidden={activeTab !== 'dashboard'}
+      >
+        <div className="dashboard-layout">
         <div className="dashboard-layout-left">
           <div className="dashboard-left-top">
             <div className="dashboard-left-top-row">
@@ -199,8 +200,14 @@ export default function App() {
             </>
           )}
         </aside>
-      </div>
-      )}
+        </div>
+      </section>
+      <section
+        className={`app-tab-panel${activeTab === 'compare' ? ' is-active' : ''}`}
+        aria-hidden={activeTab !== 'compare'}
+      >
+        <ResultCompare />
+      </section>
     </div>
   );
 }

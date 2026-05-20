@@ -1,16 +1,8 @@
 import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-
-import { CHART_ANIMATION_DURATION_MS } from '../config';
-import type { SimulationState, VehicleStatus } from '../types/simulation';
+  RESULT_A_COLOR,
+  RESULT_B_COLOR,
+} from '../config';
+import type { SimulationState, VehiclePatternSelection, VehicleStatus } from '../types/simulation';
 
 interface ReplayVehicleSource {
   frames: SimulationState[];
@@ -20,6 +12,8 @@ interface VehicleTemporalComparisonChartsProps {
   resultA: ReplayVehicleSource | null;
   resultB: ReplayVehicleSource | null;
   currentTime: number;
+  selectedSegment: VehiclePatternSelection | null;
+  onSelectSegment: (selection: VehiclePatternSelection) => void;
 }
 
 interface StatusSegment {
@@ -28,26 +22,13 @@ interface StatusSegment {
   status: VehicleStatus;
 }
 
-interface VehicleServicePoint {
-  time: number;
-  aServed?: number;
-  bServed?: number;
-  aCancelled?: number;
-  bCancelled?: number;
-}
+const DEFAULT_VEHICLE_IDS = [1, 2, 3, 4];
 
-const STATUS_META: Record<VehicleStatus, { label: string; shortLabel: string; color: string }> = {
-  idle: { label: 'Idle', shortLabel: 'I', color: '#3b82f6' },
-  picking_up: { label: 'Picking up', shortLabel: 'P', color: '#f59e0b' },
-  carrying: { label: 'Carrying', shortLabel: 'C', color: '#10b981' },
-  repositioning: { label: 'Repositioning', shortLabel: 'R', color: '#94a3b8' },
-};
-
-const SERVICE_LINE = {
-  aServed: '#22c55e',
-  bServed: '#3b82f6',
-  aCancelled: '#ef4444',
-  bCancelled: '#f97316',
+const STATUS_META: Record<VehicleStatus, { label: string; color: string }> = {
+  idle: { label: 'Idle', color: 'transparent' },
+  picking_up: { label: 'Picking up', color: '#f59e0b' },
+  carrying: { label: 'Carrying', color: '#10b981' },
+  repositioning: { label: 'Repositioning', color: '#94a3b8' },
 };
 
 function frameAtOrBefore(frames: SimulationState[], time: number): SimulationState | null {
@@ -68,7 +49,7 @@ function vehicleIdsForSources(
   resultA: ReplayVehicleSource | null,
   resultB: ReplayVehicleSource | null,
 ): number[] {
-  const ids = new Set<number>();
+  const ids = new Set<number>(DEFAULT_VEHICLE_IDS);
   for (const frame of resultA?.frames ?? []) {
     for (const vehicle of frame.vehicles) ids.add(vehicle.id);
   }
@@ -87,16 +68,15 @@ function statusAt(
   return frame?.vehicles.find(vehicle => vehicle.id === vehicleId)?.status ?? null;
 }
 
-function countPassengers(
+function countServedPassengers(
   frame: SimulationState | null,
   vehicleId: number,
-  status: 'delivered' | 'cancelled',
 ): number | undefined {
   if (!frame) return undefined;
   return frame.passengers.filter(
     passenger =>
       passenger.assignedVehicleId === vehicleId &&
-      passenger.status === status,
+      passenger.status === 'delivered',
   ).length;
 }
 
@@ -130,63 +110,33 @@ function buildStatusSegments(
   return segments;
 }
 
-function buildServiceData(
-  resultA: ReplayVehicleSource | null,
-  resultB: ReplayVehicleSource | null,
-  vehicleId: number,
-  currentTime: number,
-): VehicleServicePoint[] {
-  const times = new Set<number>();
-  for (const frame of resultA?.frames ?? []) {
-    if (frame.metrics.currentTime <= currentTime) times.add(frame.metrics.currentTime);
-  }
-  for (const frame of resultB?.frames ?? []) {
-    if (frame.metrics.currentTime <= currentTime) times.add(frame.metrics.currentTime);
-  }
-
-  const sortedTimes = Array.from(times).sort((a, b) => a - b);
-  const fallbackTimes =
-    sortedTimes.length > 0
-      ? sortedTimes
-      : [
-          resultA?.frames[0]?.metrics.currentTime,
-          resultB?.frames[0]?.metrics.currentTime,
-        ].filter((time): time is number => time != null);
-
-  return fallbackTimes.map(time => {
-    const frameA = resultA ? frameAtOrBefore(resultA.frames, time) : null;
-    const frameB = resultB ? frameAtOrBefore(resultB.frames, time) : null;
-
-    return {
-      time,
-      aServed: countPassengers(frameA, vehicleId, 'delivered'),
-      bServed: countPassengers(frameB, vehicleId, 'delivered'),
-      aCancelled: countPassengers(frameA, vehicleId, 'cancelled'),
-      bCancelled: countPassengers(frameB, vehicleId, 'cancelled'),
-    };
-  });
-}
-
 function formatStatus(status: VehicleStatus | null): string {
   return status ? STATUS_META[status].label : '-';
 }
 
 function StatusTimelineRow({
-  label,
   segments,
   minTime,
   maxTime,
+  resultSide,
+  resultLabel,
+  vehicleId,
+  selectedSegment,
+  onSelectSegment,
 }: {
-  label: string;
   segments: StatusSegment[];
   minTime: number;
   maxTime: number;
+  resultSide: 'left' | 'right';
+  resultLabel: string;
+  vehicleId: number;
+  selectedSegment: VehiclePatternSelection | null;
+  onSelectSegment: (selection: VehiclePatternSelection) => void;
 }) {
   const duration = Math.max(1, maxTime - minTime);
 
   return (
     <div className="vehicle-pattern-timeline-row">
-      <span className="vehicle-pattern-row-label">{label}</span>
       <div className="vehicle-pattern-track">
         {segments.length === 0 ? (
           <span className="vehicle-pattern-empty">No vehicle data</span>
@@ -198,20 +148,36 @@ function StatusTimelineRow({
             const left = ((start - minTime) / duration) * 100;
             const clampedLeft = Math.min(100, Math.max(0, left));
             const width = Math.max(2, ((end - start) / duration) * 100);
+            const clickable = segment.status === 'picking_up' || segment.status === 'carrying';
+            const selected =
+              selectedSegment?.resultSide === resultSide &&
+              selectedSegment.vehicleId === vehicleId &&
+              selectedSegment.startTime === segment.startTime &&
+              selectedSegment.endTime === segment.endTime &&
+              selectedSegment.status === segment.status;
 
             return (
-              <div
-                key={`${label}-${segment.startTime}-${segment.status}-${index}`}
-                className="vehicle-pattern-segment"
+              <button
+                key={`${resultLabel}-${segment.startTime}-${segment.status}-${index}`}
+                type="button"
+                className={`vehicle-pattern-segment${clickable ? ' clickable' : ''}${selected ? ' selected' : ''}`}
                 style={{
                   left: `${clampedLeft}%`,
                   width: `${Math.min(width, 100 - clampedLeft)}%`,
                   background: meta.color,
                 }}
-                title={`${label} ${meta.label}: t=${segment.startTime}-${segment.endTime}`}
-              >
-                {meta.shortLabel}
-              </div>
+                title={clickable ? `${resultLabel} V${vehicleId} ${meta.label}: t=${segment.startTime}-${segment.endTime}` : `${resultLabel} ${meta.label}: t=${segment.startTime}-${segment.endTime}`}
+                aria-label={clickable ? `Inspect ${resultLabel} V${vehicleId} ${meta.label} from ${segment.startTime} to ${segment.endTime}` : undefined}
+                onClick={clickable ? () => onSelectSegment({
+                  resultSide,
+                  resultLabel,
+                  vehicleId,
+                  status: segment.status as VehiclePatternSelection['status'],
+                  startTime: segment.startTime,
+                  endTime: segment.endTime,
+                }) : undefined}
+                disabled={!clickable}
+              />
             );
           })
         )}
@@ -220,136 +186,92 @@ function StatusTimelineRow({
   );
 }
 
-function VehiclePatternCard({
+function VehiclePatternRow({
   vehicleId,
-  resultA,
-  resultB,
+  resultSide,
+  resultLabel,
+  resultColor,
+  source,
   currentTime,
+  selectedSegment,
+  onSelectSegment,
 }: {
   vehicleId: number;
-  resultA: ReplayVehicleSource | null;
-  resultB: ReplayVehicleSource | null;
+  resultSide: 'left' | 'right';
+  resultLabel: string;
+  resultColor: string;
+  source: ReplayVehicleSource | null;
   currentTime: number;
+  selectedSegment: VehiclePatternSelection | null;
+  onSelectSegment: (selection: VehiclePatternSelection) => void;
 }) {
-  const minTime = Math.min(
-    resultA?.frames[0]?.metrics.currentTime ?? currentTime,
-    resultB?.frames[0]?.metrics.currentTime ?? currentTime,
-  );
+  const minTime = source?.frames[0]?.metrics.currentTime ?? currentTime;
   const maxTime = Math.max(currentTime, minTime + 1);
-  const frameA = resultA ? frameAtOrBefore(resultA.frames, currentTime) : null;
-  const frameB = resultB ? frameAtOrBefore(resultB.frames, currentTime) : null;
-  const statusA = statusAt(resultA, vehicleId, currentTime);
-  const statusB = statusAt(resultB, vehicleId, currentTime);
-  const serviceData = buildServiceData(resultA, resultB, vehicleId, currentTime);
+  const frame = source ? frameAtOrBefore(source.frames, currentTime) : null;
+  const status = statusAt(source, vehicleId, currentTime);
 
   return (
-    <article className="panel vehicle-pattern-card">
-      <div className="vehicle-pattern-card-head">
-        <h3 className="panel-title">Vehicle V{vehicleId}</h3>
-        <div className="vehicle-pattern-status-pills">
-          <span>A {formatStatus(statusA)}</span>
-          <span>B {formatStatus(statusB)}</span>
-        </div>
+    <div className="vehicle-pattern-row">
+      <div className="vehicle-pattern-row-head">
+        <span className="vehicle-pattern-vehicle-id">V{vehicleId}</span>
+        <span className="vehicle-pattern-row-status">{formatStatus(status)}</span>
+        <span className="vehicle-pattern-row-served" style={{ color: resultColor }}>
+          Served {countServedPassengers(frame, vehicleId) ?? '-'}
+        </span>
       </div>
+      <StatusTimelineRow
+        segments={buildStatusSegments(source, vehicleId, currentTime)}
+        minTime={minTime}
+        maxTime={maxTime}
+        resultSide={resultSide}
+        resultLabel={resultLabel}
+        vehicleId={vehicleId}
+        selectedSegment={selectedSegment}
+        onSelectSegment={onSelectSegment}
+      />
+    </div>
+  );
+}
 
-      <div className="vehicle-pattern-summary">
-        <div>
-          <span>A Served</span>
-          <strong>{countPassengers(frameA, vehicleId, 'delivered') ?? '-'}</strong>
-        </div>
-        <div>
-          <span>B Served</span>
-          <strong>{countPassengers(frameB, vehicleId, 'delivered') ?? '-'}</strong>
-        </div>
-        <div>
-          <span>A Cancel</span>
-          <strong>{countPassengers(frameA, vehicleId, 'cancelled') ?? '-'}</strong>
-        </div>
-        <div>
-          <span>B Cancel</span>
-          <strong>{countPassengers(frameB, vehicleId, 'cancelled') ?? '-'}</strong>
-        </div>
+function ResultVehicleCard({
+  side,
+  title,
+  color,
+  source,
+  vehicleIds,
+  currentTime,
+  selectedSegment,
+  onSelectSegment,
+}: {
+  side: 'left' | 'right';
+  title: string;
+  color: string;
+  source: ReplayVehicleSource | null;
+  vehicleIds: number[];
+  currentTime: number;
+  selectedSegment: VehiclePatternSelection | null;
+  onSelectSegment: (selection: VehiclePatternSelection) => void;
+}) {
+  return (
+    <article className="panel vehicle-pattern-result-card">
+      <div className="vehicle-pattern-result-head">
+        <h3 style={{ color }}>{title}</h3>
+        <span>{source ? `${vehicleIds.length} vehicles` : 'No file'}</span>
       </div>
-
-      <div className="vehicle-pattern-timelines">
-        <StatusTimelineRow
-          label="A"
-          segments={buildStatusSegments(resultA, vehicleId, currentTime)}
-          minTime={minTime}
-          maxTime={maxTime}
-        />
-        <StatusTimelineRow
-          label="B"
-          segments={buildStatusSegments(resultB, vehicleId, currentTime)}
-          minTime={minTime}
-          maxTime={maxTime}
-        />
-      </div>
-
-      <div className="vehicle-pattern-chart">
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={serviceData} margin={{ top: 4, right: 10, left: -12, bottom: 18 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} />
-            <YAxis stroke="#94a3b8" fontSize={10} allowDecimals={false} />
-            <Tooltip
-              contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8 }}
-              labelStyle={{ color: '#e2e8f0' }}
-              labelFormatter={label => `t = ${label}`}
-            />
-            <Legend
-              verticalAlign="bottom"
-              align="center"
-              height={22}
-              wrapperStyle={{ fontSize: 10, lineHeight: '14px' }}
-            />
-            <Line
-              type="monotone"
-              dataKey="aServed"
-              name="A Served"
-              stroke={SERVICE_LINE.aServed}
-              strokeWidth={2}
-              dot={{ r: 1.7, fill: SERVICE_LINE.aServed }}
-              activeDot={{ r: 3 }}
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-            />
-            <Line
-              type="monotone"
-              dataKey="bServed"
-              name="B Served"
-              stroke={SERVICE_LINE.bServed}
-              strokeWidth={2}
-              dot={{ r: 1.7, fill: SERVICE_LINE.bServed }}
-              activeDot={{ r: 3 }}
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-            />
-            <Line
-              type="monotone"
-              dataKey="aCancelled"
-              name="A Cancel"
-              stroke={SERVICE_LINE.aCancelled}
-              strokeWidth={2}
-              dot={{ r: 1.7, fill: SERVICE_LINE.aCancelled }}
-              activeDot={{ r: 3 }}
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-            />
-            <Line
-              type="monotone"
-              dataKey="bCancelled"
-              name="B Cancel"
-              stroke={SERVICE_LINE.bCancelled}
-              strokeDasharray="6 3"
-              strokeWidth={2}
-              dot={{ r: 1.7, fill: SERVICE_LINE.bCancelled }}
-              activeDot={{ r: 3 }}
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-            />
-          </LineChart>
-        </ResponsiveContainer>
+      <div className="vehicle-pattern-row-list">
+        {vehicleIds.map(vehicleId => (
+          <VehiclePatternRow
+            key={`${title}-${vehicleId}`}
+            vehicleId={vehicleId}
+            resultSide={side}
+            resultLabel={title}
+            resultColor={color}
+            source={source}
+            currentTime={currentTime}
+            selectedSegment={selectedSegment}
+            onSelectSegment={onSelectSegment}
+          />
+        ))}
       </div>
     </article>
   );
@@ -359,6 +281,8 @@ export default function VehicleTemporalComparisonCharts({
   resultA,
   resultB,
   currentTime,
+  selectedSegment,
+  onSelectSegment,
 }: VehicleTemporalComparisonChartsProps) {
   const vehicleIds = vehicleIdsForSources(resultA, resultB);
 
@@ -376,25 +300,41 @@ export default function VehicleTemporalComparisonCharts({
   return (
     <section className="vehicle-pattern-section">
       <div className="vehicle-pattern-legend">
-        {(Object.entries(STATUS_META) as Array<[VehicleStatus, { label: string; color: string }]>).map(
-          ([status, meta]) => (
-            <span key={status}>
-              <i style={{ background: meta.color }} />
-              {meta.label}
-            </span>
-          ),
-        )}
+        {(Object.entries(STATUS_META) as Array<[VehicleStatus, { label: string; color: string }]>).filter(
+          ([status]) => status !== 'repositioning',
+        ).map(([status, meta]) => (
+          <span key={status}>
+            <i
+              style={{
+                background: meta.color,
+                borderColor: status === 'idle' ? 'rgba(148, 163, 184, 0.34)' : meta.color,
+              }}
+            />
+            {meta.label}
+          </span>
+        ))}
       </div>
       <div className="vehicle-pattern-grid">
-        {vehicleIds.map(vehicleId => (
-          <VehiclePatternCard
-            key={vehicleId}
-            vehicleId={vehicleId}
-            resultA={resultA}
-            resultB={resultB}
-            currentTime={currentTime}
-          />
-        ))}
+        <ResultVehicleCard
+          side="left"
+          title="Result A"
+          color={RESULT_A_COLOR}
+          source={resultA}
+          vehicleIds={vehicleIds}
+          currentTime={currentTime}
+          selectedSegment={selectedSegment}
+          onSelectSegment={onSelectSegment}
+        />
+        <ResultVehicleCard
+          side="right"
+          title="Result B"
+          color={RESULT_B_COLOR}
+          source={resultB}
+          vehicleIds={vehicleIds}
+          currentTime={currentTime}
+          selectedSegment={selectedSegment}
+          onSelectSegment={onSelectSegment}
+        />
       </div>
     </section>
   );
