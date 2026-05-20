@@ -2,6 +2,7 @@ import type { SimulationMetrics } from '../types/simulation';
 
 interface MetricsPanelProps {
   metrics: SimulationMetrics;
+  accentColor?: string;
 }
 
 interface MetricCardProps {
@@ -23,40 +24,49 @@ function MetricCard({ label, value, unit, color }: MetricCardProps) {
   );
 }
 
-export default function MetricsPanel({ metrics }: MetricsPanelProps) {
+export default function MetricsPanel({ metrics, accentColor }: MetricsPanelProps) {
+  const colors = {
+    activeVehicles: accentColor ?? '#3b82f6',
+    served: accentColor ?? '#10b981',
+    averageWait: accentColor ?? '#f59e0b',
+    averageTravel: accentColor ?? '#8b5cf6',
+    canceled: accentColor ?? '#ec4899',
+    waiting: accentColor ?? '#ef4444',
+  };
+
   return (
     <div className="metrics-panel">
       <MetricCard
         label="Active DRT Vehicles"
         value={`${metrics.activeVehicles} / ${metrics.totalVehicles}`}
-        color="#3b82f6"
+        color={colors.activeVehicles}
       />
       <MetricCard
         label="Passengers Served"
         value={metrics.totalPassengersServed}
-        color="#10b981"
+        color={colors.served}
       />
       <MetricCard
         label="Average Wait Time"
         value={metrics.averageWaitTime}
         unit=" min"
-        color="#f59e0b"
+        color={colors.averageWait}
       />
       <MetricCard
         label="Average Travel Time"
         value={metrics.averageTravelTime}
         unit=" min"
-        color="#8b5cf6"
+        color={colors.averageTravel}
       />
       <MetricCard
         label="Canceled Count"
         value={metrics.cancelCount ?? 0}
-        color="#ec4899"
+        color={colors.canceled}
       />
       <MetricCard
         label="Waiting Passengers"
         value={metrics.totalPassengersWaiting}
-        color="#ef4444"
+        color={colors.waiting}
       />
     </div>
   );

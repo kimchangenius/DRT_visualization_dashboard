@@ -4,6 +4,7 @@ import type {
   Vehicle,
   Passenger,
   EdgeTraversal,
+  VehiclePatternSelection,
   // NodeActivity,  // Activity ring – disabled
 } from '../types/simulation';
 
@@ -13,6 +14,8 @@ interface NetworkMapProps {
   title?: string;
   analysisVehicleId?: number | null;
   edgeTraversals?: EdgeTraversal[];
+  selectedSegment?: VehiclePatternSelection | null;
+  onClearSelectedSegment?: () => void;
   // nodeActivity?: NodeActivity[];  // Activity ring – disabled
   maxWaitTimeThreshold?: number;
 }
@@ -160,10 +163,15 @@ export default function NetworkMap({
   title,
   analysisVehicleId,
   edgeTraversals,
+  selectedSegment,
+  onClearSelectedSegment,
   // nodeActivity,  // Activity ring – disabled
   maxWaitTimeThreshold = 10,
 }: NetworkMapProps) {
   const inAnalysis = analysisVehicleId != null;
+  const selectedVehicleId = selectedSegment?.vehicleId ?? null;
+  const focusedVehicleId = analysisVehicleId ?? selectedVehicleId;
+  const hasTimelineSelection = selectedSegment != null;
 
   const waitingByNode = new Map<number, number>();
   for (const p of passengers) {
@@ -173,12 +181,12 @@ export default function NetworkMap({
   }
 
   const movingLinkColors = useMemo(() => {
-    if (inAnalysis) {
-      const selected = vehicles.filter(v => v.id === analysisVehicleId);
+    if (focusedVehicleId != null) {
+      const selected = vehicles.filter(v => v.id === focusedVehicleId);
       return buildMovingLinkColors(selected);
     }
     return buildMovingLinkColors(vehicles);
-  }, [vehicles, inAnalysis, analysisVehicleId]);
+  }, [vehicles, focusedVehicleId]);
 
   // // Node activity lookup (Activity ring – disabled)
   // const nodeActivityById = useMemo(() => {
@@ -205,12 +213,12 @@ export default function NetworkMap({
     destColor: string;
   };
   const perPassengerMarkers = useMemo<PerPassengerMarker[]>(() => {
-    if (!inAnalysis || analysisVehicleId == null) return [];
+    if (focusedVehicleId == null) return [];
     const markers: PerPassengerMarker[] = [];
     for (const p of passengers) {
-      const isUnaccepted = p.status === 'waiting' && p.assignedVehicleId == null;
+      const isUnaccepted = inAnalysis && p.status === 'waiting' && p.assignedVehicleId == null;
       const isOperatingBySelectedVehicle =
-        p.assignedVehicleId === analysisVehicleId &&
+        p.assignedVehicleId === focusedVehicleId &&
         (p.status === 'waiting' || p.status === 'picked_up');
       if (!isUnaccepted && !isOperatingBySelectedVehicle) continue;
 
@@ -233,7 +241,17 @@ export default function NetworkMap({
       }
     }
     return markers;
-  }, [inAnalysis, analysisVehicleId, passengers]);
+  }, [inAnalysis, focusedVehicleId, passengers]);
+
+  const selectedVehicle = selectedSegment
+    ? vehicles.find(vehicle => vehicle.id === selectedSegment.vehicleId) ?? null
+    : null;
+  const selectedPassengers = selectedSegment
+    ? passengers.filter(passenger =>
+        passenger.assignedVehicleId === selectedSegment.vehicleId &&
+        (passenger.status === 'waiting' || passenger.status === 'picked_up'),
+      )
+    : [];
 
   return (
     <div className="panel network-panel">
@@ -403,11 +421,11 @@ export default function NetworkMap({
             const pos = getVehiclePosition(v);
             const hidden = inAnalysis && analysisVehicleId != null && v.id !== analysisVehicleId;
             const dimmed = inAnalysis && analysisVehicleId == null && false; // reserved
-            const isAnalysisVehicle = inAnalysis && v.id === analysisVehicleId;
+            const isFocusedVehicle = focusedVehicleId != null && v.id === focusedVehicleId;
             if (hidden) return null;
             return (
-              <g key={`vehicle-${v.id}`} opacity={1}>
-                {isAnalysisVehicle && (
+              <g key={`vehicle-${v.id}`} opacity={hasTimelineSelection && !isFocusedVehicle ? 0.42 : 1}>
+                {isFocusedVehicle && (
                   <circle
                     cx={pos.x} cy={pos.y} r={8}
                     fill="none"
@@ -430,14 +448,14 @@ export default function NetworkMap({
                   </circle>
                 )}
                 <circle
-                  cx={pos.x} cy={pos.y} r={isAnalysisVehicle ? 5 : 4}
+                  cx={pos.x} cy={pos.y} r={isFocusedVehicle ? 5 : 4}
                   fill={vehicleColor(v.status)}
-                  stroke="#fff" strokeWidth={isAnalysisVehicle ? 1.5 : 1.2}
+                  stroke="#fff" strokeWidth={isFocusedVehicle ? 1.5 : 1.2}
                 >
                   {!dimmed && (
                     <animate
                       attributeName="r"
-                      values={isAnalysisVehicle ? '5;6.5;5' : '4;5;4'}
+                      values={isFocusedVehicle ? '5;6.5;5' : '4;5;4'}
                       dur="1.5s"
                       repeatCount="indefinite"
                     />
@@ -446,7 +464,7 @@ export default function NetworkMap({
                 <text
                   x={pos.x} y={pos.y - 7}
                   textAnchor="middle" fill="#fff"
-                  fontSize={isAnalysisVehicle ? 6 : 5}
+                  fontSize={isFocusedVehicle ? 6 : 5}
                   fontWeight="bold"
                 >
                   V{v.id}
@@ -455,6 +473,32 @@ export default function NetworkMap({
             );
           })}
         </svg>
+
+        {selectedSegment && selectedVehicle && (
+          <div className="network-selection-tooltip">
+            <div className="network-selection-head">
+              <div className="network-selection-title">
+                {selectedSegment.resultLabel} V{selectedSegment.vehicleId} {selectedSegment.status === 'picking_up' ? 'Picking up' : 'Carrying'}
+              </div>
+              <button
+                type="button"
+                className="network-selection-close"
+                aria-label="Close selected segment details"
+                onClick={onClearSelectedSegment}
+              >
+                x
+              </button>
+            </div>
+            <div className="network-selection-grid">
+              <span>Time</span>
+              <strong>t {selectedSegment.startTime}-{selectedSegment.endTime}</strong>
+              <span>Node</span>
+              <strong>{selectedVehicle.currentNodeId}{selectedVehicle.targetNodeId != null ? ` -> ${selectedVehicle.targetNodeId}` : ''}</strong>
+              <span>Passenger</span>
+              <strong>{selectedPassengers.length > 0 ? selectedPassengers.map(p => `P${p.id}`).join(', ') : '-'}</strong>
+            </div>
+          </div>
+        )}
 
         <div className="map-legend">
           {inAnalysis ? (

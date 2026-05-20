@@ -143,6 +143,15 @@ export interface VehicleTimelineDatum {
   status: VehicleStatus;
 }
 
+export interface VehiclePatternSelection {
+  resultSide: 'left' | 'right';
+  resultLabel: string;
+  vehicleId: number;
+  status: Extract<VehicleStatus, 'picking_up' | 'carrying'>;
+  startTime: number;
+  endTime: number;
+}
+
 export interface EdgeTraversal {
   from: number;
   to: number;

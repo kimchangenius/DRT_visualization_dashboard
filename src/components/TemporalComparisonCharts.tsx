@@ -1,6 +1,5 @@
 import {
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ReferenceLine,
@@ -9,9 +8,14 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { ReactNode } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type { MouseEvent, ReactNode, WheelEvent } from 'react';
 
-import { CHART_ANIMATION_DURATION_MS } from '../config';
+import {
+  COMPARISON_CHART_ANIMATION_DURATION_MS,
+  RESULT_A_COLOR,
+  RESULT_B_COLOR,
+} from '../config';
 import type { SimulationState } from '../types/simulation';
 
 interface ReplayTemporalSource {
@@ -44,8 +48,68 @@ interface TemporalComparisonPoint {
   bAverageTravelTime?: number;
 }
 
+interface TemporalMetricConfig {
+  title: string;
+  aKey: keyof TemporalComparisonPoint;
+  bKey: keyof TemporalComparisonPoint;
+  allowDecimals?: boolean;
+  domain?: [number, number];
+}
+
+type ZoomDomain = [number, number];
+type ZoomDomains = Record<string, ZoomDomain | null | undefined>;
+
 const RESULT_A_DASH = undefined;
-const RESULT_B_DASH = '5 4';
+const RESULT_B_DASH = undefined;
+
+const TEMPORAL_METRICS: TemporalMetricConfig[] = [
+  {
+    title: 'Served Passengers',
+    aKey: 'aServed',
+    bKey: 'bServed',
+    allowDecimals: false,
+  },
+  {
+    title: 'Cancelled Passengers',
+    aKey: 'aCancelled',
+    bKey: 'bCancelled',
+    allowDecimals: false,
+  },
+  {
+    title: 'Waiting Passengers',
+    aKey: 'aWaiting',
+    bKey: 'bWaiting',
+    allowDecimals: false,
+  },
+  {
+    title: 'In-Vehicle Passengers',
+    aKey: 'aInTransit',
+    bKey: 'bInTransit',
+    allowDecimals: false,
+  },
+  {
+    title: 'Vehicle Utilization (%)',
+    aKey: 'aUtilization',
+    bKey: 'bUtilization',
+    domain: [0, 100],
+  },
+  {
+    title: 'Active Vehicles',
+    aKey: 'aActiveVehicles',
+    bKey: 'bActiveVehicles',
+    allowDecimals: false,
+  },
+  {
+    title: 'Average Wait Time',
+    aKey: 'aAverageWaitTime',
+    bKey: 'bAverageWaitTime',
+  },
+  {
+    title: 'Average Travel Time',
+    aKey: 'aAverageTravelTime',
+    bKey: 'bAverageTravelTime',
+  },
+];
 
 function frameAtOrBefore(frames: SimulationState[], time: number): SimulationState | null {
   if (frames.length === 0 || time < frames[0].metrics.currentTime) return null;
@@ -103,51 +167,49 @@ function formatNumber(value: number | undefined, digits = 1): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(digits);
 }
 
-function deltaValue(a: number | undefined, b: number | undefined): number | undefined {
-  if (a == null || b == null) return undefined;
-  return Math.round((b - a) * 10) / 10;
+function boundsFromData(data: TemporalComparisonPoint[]): ZoomDomain {
+  if (data.length === 0) return [0, 1];
+  const times = data.map(point => point.time);
+  const min = Math.min(...times);
+  const max = Math.max(...times);
+  return min === max ? [min, min + 1] : [min, max];
 }
 
-function DeltaItem({
-  label,
-  value,
-  unit = '',
-  lowerIsBetter = false,
-}: {
-  label: string;
-  value: number | undefined;
-  unit?: string;
-  lowerIsBetter?: boolean;
-}) {
-  const direction = value == null || value === 0 ? 'neutral' : value > 0 ? 'up' : 'down';
-  const favorable =
-    value == null || value === 0
-      ? false
-      : lowerIsBetter
-        ? value < 0
-        : value > 0;
+function clampDomain(domain: ZoomDomain, bounds: ZoomDomain): ZoomDomain {
+  const [min, max] = bounds;
+  const fullRange = Math.max(1, max - min);
+  const range = Math.min(fullRange, Math.max(1, domain[1] - domain[0]));
+  let start = domain[0];
+  let end = start + range;
 
-  return (
-    <div className={`temporal-delta-item ${direction}${favorable ? ' favorable' : ''}`}>
-      <span className="temporal-delta-label">{label}</span>
-      <span className="temporal-delta-value">
-        {value == null ? '-' : `${value > 0 ? '+' : ''}${formatNumber(value)}${unit}`}
-      </span>
-    </div>
-  );
+  if (start < min) {
+    start = min;
+    end = start + range;
+  }
+  if (end > max) {
+    end = max;
+    start = end - range;
+  }
+
+  return [Math.max(min, start), Math.min(max, end)];
 }
 
 function TemporalChart({
   title,
+  actions,
   children,
 }: {
   title: string;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="panel temporal-chart-panel">
-      <h3 className="panel-title">{title}</h3>
-      <div className="temporal-chart-container">{children}</div>
+      <div className="temporal-chart-head">
+        <h3 className="panel-title">{title}</h3>
+        {actions}
+      </div>
+      {children}
     </div>
   );
 }
@@ -157,28 +219,26 @@ function renderComparisonLine({
   name,
   color,
   dash,
-  yAxisId = 'left',
 }: {
   dataKey: keyof TemporalComparisonPoint;
   name: string;
   color: string;
   dash?: string;
-  yAxisId?: string;
 }) {
   return (
     <Line
       type="monotone"
       dataKey={dataKey}
       name={name}
-      yAxisId={yAxisId}
+      yAxisId="left"
       stroke={color}
-      strokeWidth={1.8}
+      strokeWidth={2}
       strokeDasharray={dash}
       dot={false}
-      activeDot={{ r: 3 }}
+      activeDot={false}
       connectNulls={false}
       isAnimationActive
-      animationDuration={CHART_ANIMATION_DURATION_MS}
+      animationDuration={COMPARISON_CHART_ANIMATION_DURATION_MS}
       animationEasing="ease-out"
     />
   );
@@ -210,6 +270,115 @@ function renderTimeCursor(currentTime: number) {
   );
 }
 
+function MetricTemporalChart({
+  metric,
+  chartData,
+  currentTime,
+  xDomain,
+  isZoomed,
+  isPanning,
+  canInteract,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+  onWheel,
+  onMouseDown,
+  onMouseMove,
+  onMouseUp,
+}: {
+  metric: TemporalMetricConfig;
+  chartData: TemporalComparisonPoint[];
+  currentTime: number;
+  xDomain: ZoomDomain;
+  isZoomed: boolean;
+  isPanning: boolean;
+  canInteract: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetZoom: () => void;
+  onWheel: (event: WheelEvent<HTMLDivElement>) => void;
+  onMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
+  onMouseMove: (event: MouseEvent<HTMLDivElement>) => void;
+  onMouseUp: () => void;
+}) {
+  const actions = (
+    <div className="temporal-chart-actions" aria-label={`${metric.title} zoom controls`}>
+      <button
+        type="button"
+        className="temporal-zoom-btn"
+        onClick={onZoomIn}
+        disabled={!canInteract}
+      >
+        +
+      </button>
+      <button
+        type="button"
+        className="temporal-zoom-btn"
+        onClick={onZoomOut}
+        disabled={!canInteract || !isZoomed}
+      >
+        -
+      </button>
+      <button
+        type="button"
+        className="temporal-zoom-btn"
+        onClick={onResetZoom}
+        disabled={!isZoomed}
+      >
+        Reset
+      </button>
+    </div>
+  );
+
+  return (
+    <TemporalChart title={metric.title} actions={actions}>
+      <div
+        className={`temporal-chart-container temporal-chart-interaction${isPanning ? ' panning' : ''}`}
+        onWheel={onWheel}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseLeave={onMouseUp}
+      >
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 4, right: 10, left: -10, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+            <XAxis
+              dataKey="time"
+              type="number"
+              domain={xDomain}
+              allowDataOverflow
+              stroke="#94a3b8"
+              fontSize={10}
+            />
+            <YAxis
+              yAxisId="left"
+              stroke="#94a3b8"
+              fontSize={10}
+              allowDecimals={metric.allowDecimals ?? true}
+              domain={metric.domain}
+            />
+            {renderCommonTooltip()}
+            {renderTimeCursor(currentTime)}
+            {renderComparisonLine({
+              dataKey: metric.aKey,
+              name: 'Result A',
+              color: RESULT_A_COLOR,
+              dash: RESULT_A_DASH,
+            })}
+            {renderComparisonLine({
+              dataKey: metric.bKey,
+              name: 'Result B',
+              color: RESULT_B_COLOR,
+              dash: RESULT_B_DASH,
+            })}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </TemporalChart>
+  );
+}
+
 export default function TemporalComparisonCharts({
   resultA,
   resultB,
@@ -221,8 +390,80 @@ export default function TemporalComparisonCharts({
     ? visibleData
     : data.slice(0, Math.min(1, data.length));
   const hasData = data.length > 0;
-  const currentA = resultA ? frameAtOrBefore(resultA.frames, currentTime)?.metrics : undefined;
-  const currentB = resultB ? frameAtOrBefore(resultB.frames, currentTime)?.metrics : undefined;
+  const fullDomain = useMemo(() => boundsFromData(chartData), [chartData]);
+  const [zoomDomains, setZoomDomains] = useState<ZoomDomains>({});
+  const [panningMetric, setPanningMetric] = useState<string | null>(null);
+  const panStartRef = useRef<{ metricTitle: string; x: number; domain: ZoomDomain } | null>(null);
+  const canInteract = chartData.length > 1 && fullDomain[1] > fullDomain[0];
+
+  const domainForMetric = (metricTitle: string) => (
+    clampDomain(zoomDomains[metricTitle] ?? fullDomain, fullDomain)
+  );
+
+  const zoomMetric = (metricTitle: string, factor: number, anchorRatio = 0.5) => {
+    if (!canInteract) return;
+    setZoomDomains(prev => {
+      const activeDomain = clampDomain(prev[metricTitle] ?? fullDomain, fullDomain);
+      const fullRange = Math.max(1, fullDomain[1] - fullDomain[0]);
+      const activeRange = Math.max(1, activeDomain[1] - activeDomain[0]);
+      const minRange = Math.min(fullRange, Math.max(1, Math.round(fullRange * 0.08)));
+      const nextRange = Math.min(fullRange, Math.max(minRange, activeRange * factor));
+
+      if (nextRange >= fullRange) return { ...prev, [metricTitle]: null };
+
+      const center = activeDomain[0] + activeRange * anchorRatio;
+      return {
+        ...prev,
+        [metricTitle]: clampDomain(
+          [center - nextRange * anchorRatio, center + nextRange * (1 - anchorRatio)],
+          fullDomain,
+        ),
+      };
+    });
+  };
+
+  const resetMetricZoom = (metricTitle: string) => {
+    setZoomDomains(prev => ({ ...prev, [metricTitle]: null }));
+  };
+
+  const handleWheel = (metricTitle: string) => (event: WheelEvent<HTMLDivElement>) => {
+    if (!canInteract) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = rect.width > 0
+      ? Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width))
+      : 0.5;
+    zoomMetric(metricTitle, event.deltaY > 0 ? 1.18 : 0.82, ratio);
+  };
+
+  const handleMouseDown = (metricTitle: string) => (event: MouseEvent<HTMLDivElement>) => {
+    if (!canInteract || zoomDomains[metricTitle] == null || event.button !== 0) return;
+    event.preventDefault();
+    panStartRef.current = { metricTitle, x: event.clientX, domain: domainForMetric(metricTitle) };
+    setPanningMetric(metricTitle);
+  };
+
+  const handleMouseMove = (event: MouseEvent<HTMLDivElement>) => {
+    if (!canInteract || !panStartRef.current) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const width = Math.max(1, rect.width);
+    const panStart = panStartRef.current;
+    const range = panStart.domain[1] - panStart.domain[0];
+    const shift = -((event.clientX - panStart.x) / width) * range;
+    setZoomDomains(prev => ({
+      ...prev,
+      [panStart.metricTitle]: clampDomain([
+        panStart.domain[0] + shift,
+        panStart.domain[1] + shift,
+      ], fullDomain),
+    }));
+  };
+
+  const stopPanning = () => {
+    panStartRef.current = null;
+    setPanningMetric(null);
+  };
 
   if (!hasData) {
     return (
@@ -237,110 +478,26 @@ export default function TemporalComparisonCharts({
 
   return (
     <section className="temporal-comparison-section">
-      <div className="temporal-delta-strip">
-        <DeltaItem
-          label="Served B-A"
-          value={deltaValue(currentA?.totalPassengersServed, currentB?.totalPassengersServed)}
-        />
-        <DeltaItem
-          label="Cancel B-A"
-          value={deltaValue(currentA?.cancelCount, currentB?.cancelCount)}
-          lowerIsBetter
-        />
-        <DeltaItem
-          label="Avg Wait B-A"
-          value={deltaValue(currentA?.averageWaitTime, currentB?.averageWaitTime)}
-          unit="m"
-          lowerIsBetter
-        />
-        <DeltaItem
-          label="Util B-A"
-          value={deltaValue(currentA?.vehicleUtilization, currentB?.vehicleUtilization)}
-          unit="%"
-        />
-      </div>
-
       <div className="temporal-chart-grid">
-        <TemporalChart title="Passenger Outcomes">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 4, right: 10, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} />
-              <YAxis yAxisId="left" stroke="#94a3b8" fontSize={10} allowDecimals={false} />
-              {renderCommonTooltip()}
-              <Legend wrapperStyle={{ fontSize: 10 }} />
-              {renderTimeCursor(currentTime)}
-              {renderComparisonLine({ dataKey: 'aServed', name: 'A Served', color: '#10b981', dash: RESULT_A_DASH })}
-              {renderComparisonLine({ dataKey: 'bServed', name: 'B Served', color: '#10b981', dash: RESULT_B_DASH })}
-              {renderComparisonLine({ dataKey: 'aCancelled', name: 'A Cancelled', color: '#ef4444', dash: RESULT_A_DASH })}
-              {renderComparisonLine({ dataKey: 'bCancelled', name: 'B Cancelled', color: '#ef4444', dash: RESULT_B_DASH })}
-            </LineChart>
-          </ResponsiveContainer>
-        </TemporalChart>
-
-        <TemporalChart title="Demand Pressure">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 4, right: 10, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} />
-              <YAxis yAxisId="left" stroke="#94a3b8" fontSize={10} allowDecimals={false} />
-              {renderCommonTooltip()}
-              <Legend wrapperStyle={{ fontSize: 10 }} />
-              {renderTimeCursor(currentTime)}
-              {renderComparisonLine({ dataKey: 'aWaiting', name: 'A Waiting', color: '#f59e0b', dash: RESULT_A_DASH })}
-              {renderComparisonLine({ dataKey: 'bWaiting', name: 'B Waiting', color: '#f59e0b', dash: RESULT_B_DASH })}
-              {renderComparisonLine({ dataKey: 'aInTransit', name: 'A In vehicle', color: '#3b82f6', dash: RESULT_A_DASH })}
-              {renderComparisonLine({ dataKey: 'bInTransit', name: 'B In vehicle', color: '#3b82f6', dash: RESULT_B_DASH })}
-            </LineChart>
-          </ResponsiveContainer>
-        </TemporalChart>
-
-        <TemporalChart title="Vehicle Operations">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 4, right: 4, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} />
-              <YAxis yAxisId="left" stroke="#94a3b8" fontSize={10} domain={[0, 100]} />
-              <YAxis yAxisId="right" orientation="right" stroke="#94a3b8" fontSize={10} allowDecimals={false} />
-              {renderCommonTooltip()}
-              <Legend wrapperStyle={{ fontSize: 10 }} />
-              {renderTimeCursor(currentTime)}
-              {renderComparisonLine({ dataKey: 'aUtilization', name: 'A Util %', color: '#8b5cf6', dash: RESULT_A_DASH })}
-              {renderComparisonLine({ dataKey: 'bUtilization', name: 'B Util %', color: '#8b5cf6', dash: RESULT_B_DASH })}
-              {renderComparisonLine({
-                dataKey: 'aActiveVehicles',
-                name: 'A Active',
-                color: '#38bdf8',
-                dash: RESULT_A_DASH,
-                yAxisId: 'right',
-              })}
-              {renderComparisonLine({
-                dataKey: 'bActiveVehicles',
-                name: 'B Active',
-                color: '#38bdf8',
-                dash: RESULT_B_DASH,
-                yAxisId: 'right',
-              })}
-            </LineChart>
-          </ResponsiveContainer>
-        </TemporalChart>
-
-        <TemporalChart title="Service Quality">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData} margin={{ top: 4, right: 10, left: -10, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-              <XAxis dataKey="time" stroke="#94a3b8" fontSize={10} />
-              <YAxis yAxisId="left" stroke="#94a3b8" fontSize={10} />
-              {renderCommonTooltip()}
-              <Legend wrapperStyle={{ fontSize: 10 }} />
-              {renderTimeCursor(currentTime)}
-              {renderComparisonLine({ dataKey: 'aAverageWaitTime', name: 'A Avg wait', color: '#f59e0b', dash: RESULT_A_DASH })}
-              {renderComparisonLine({ dataKey: 'bAverageWaitTime', name: 'B Avg wait', color: '#f59e0b', dash: RESULT_B_DASH })}
-              {renderComparisonLine({ dataKey: 'aAverageTravelTime', name: 'A Avg travel', color: '#ec4899', dash: RESULT_A_DASH })}
-              {renderComparisonLine({ dataKey: 'bAverageTravelTime', name: 'B Avg travel', color: '#ec4899', dash: RESULT_B_DASH })}
-            </LineChart>
-          </ResponsiveContainer>
-        </TemporalChart>
+        {TEMPORAL_METRICS.map(metric => (
+          <MetricTemporalChart
+            key={metric.title}
+            metric={metric}
+            chartData={chartData}
+            currentTime={currentTime}
+            xDomain={domainForMetric(metric.title)}
+            isZoomed={zoomDomains[metric.title] != null}
+            isPanning={panningMetric === metric.title}
+            canInteract={canInteract}
+            onZoomIn={() => zoomMetric(metric.title, 0.7)}
+            onZoomOut={() => zoomMetric(metric.title, 1.35)}
+            onResetZoom={() => resetMetricZoom(metric.title)}
+            onWheel={handleWheel(metric.title)}
+            onMouseDown={handleMouseDown(metric.title)}
+            onMouseMove={handleMouseMove}
+            onMouseUp={stopPanning}
+          />
+        ))}
       </div>
     </section>
   );

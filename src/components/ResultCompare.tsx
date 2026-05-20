@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import NetworkMap from './NetworkMap';
-import MetricsPanel from './MetricsPanel';
 import TemporalComparisonCharts from './TemporalComparisonCharts';
 import VehicleTemporalComparisonCharts from './VehicleTemporalComparisonCharts';
-import { PLAYBACK_INTERVAL_MS } from '../config';
-import type { SimulationState } from '../types/simulation';
+import { PLAYBACK_INTERVAL_MS, RESULT_A_COLOR, RESULT_B_COLOR } from '../config';
+import type { SimulationMetrics, SimulationState, VehiclePatternSelection } from '../types/simulation';
 
 interface LoadedReplay {
   name: string;
@@ -21,6 +20,46 @@ const SIDE_LABEL: Record<ReplaySide, string> = {
   left: 'Result A',
   right: 'Result B',
 };
+
+const SIDE_COLOR: Record<ReplaySide, string> = {
+  left: RESULT_A_COLOR,
+  right: RESULT_B_COLOR,
+};
+
+interface ComparisonMetricRow {
+  label: string;
+  value: (metrics: SimulationMetrics) => string | number;
+  unit?: string;
+}
+
+const COMPARISON_METRIC_ROWS: ComparisonMetricRow[] = [
+  {
+    label: 'Active DRT Vehicles',
+    value: metrics => `${metrics.activeVehicles} / ${metrics.totalVehicles}`,
+  },
+  {
+    label: 'Passengers Served',
+    value: metrics => metrics.totalPassengersServed,
+  },
+  {
+    label: 'Canceled Count',
+    value: metrics => metrics.cancelCount ?? 0,
+  },
+  {
+    label: 'Average Wait Time',
+    value: metrics => metrics.averageWaitTime,
+    unit: ' min',
+  },
+  {
+    label: 'Average Travel Time',
+    value: metrics => metrics.averageTravelTime,
+    unit: ' min',
+  },
+  {
+    label: 'Waiting Passengers',
+    value: metrics => metrics.totalPassengersWaiting,
+  },
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -142,10 +181,14 @@ function ResultMapPanel({
   side,
   replay,
   frame,
+  selectedSegment,
+  onClearSelectedSegment,
 }: {
   side: ReplaySide;
   replay: LoadedReplay | null;
   frame: SimulationState | null;
+  selectedSegment: VehiclePatternSelection | null;
+  onClearSelectedSegment: () => void;
 }) {
   if (!replay || !frame) {
     return (
@@ -165,31 +208,50 @@ function ResultMapPanel({
         vehicles={frame.vehicles}
         passengers={frame.passengers}
         maxWaitTimeThreshold={frame.maxWaitTime}
+        selectedSegment={selectedSegment?.resultSide === side ? selectedSegment : null}
+        onClearSelectedSegment={onClearSelectedSegment}
       />
     </section>
   );
 }
 
-function ResultMetricsPanel({
-  side,
-  replay,
-  frame,
+function metricDisplayValue(
+  row: ComparisonMetricRow,
+  frame: SimulationState | null,
+): string {
+  if (!frame) return '-';
+  return `${row.value(frame.metrics)}${row.unit ?? ''}`;
+}
+
+function ComparisonMetricsPanel({
+  leftFrame,
+  rightFrame,
 }: {
-  side: ReplaySide;
-  replay: LoadedReplay | null;
-  frame: SimulationState | null;
+  leftFrame: SimulationState | null;
+  rightFrame: SimulationState | null;
 }) {
   return (
-    <div className="panel compare-result-metrics-panel">
-      <div className="compare-result-metrics-head">
-        <h3 className="panel-title">{SIDE_LABEL[side]} Metrics</h3>
-        {replay ? <span className="compare-metrics-source">{replay.name}</span> : null}
+    <div className="panel compare-metrics-comparison-panel">
+      <div className="compare-metrics-table">
+        <div className="compare-metrics-table-head compare-metrics-label-head">Metric</div>
+        <div className="compare-metrics-table-head compare-metrics-result-head" style={{ color: SIDE_COLOR.left }}>
+          Result A
+        </div>
+        <div className="compare-metrics-table-head compare-metrics-result-head" style={{ color: SIDE_COLOR.right }}>
+          Result B
+        </div>
+        {COMPARISON_METRIC_ROWS.map(row => (
+          <div className="compare-metrics-row" key={row.label}>
+            <div className="compare-metrics-row-label">{row.label}</div>
+            <div className="compare-metrics-row-value" style={{ color: SIDE_COLOR.left }}>
+              {metricDisplayValue(row, leftFrame)}
+            </div>
+            <div className="compare-metrics-row-value" style={{ color: SIDE_COLOR.right }}>
+              {metricDisplayValue(row, rightFrame)}
+            </div>
+          </div>
+        ))}
       </div>
-      {frame ? (
-        <MetricsPanel metrics={frame.metrics} />
-      ) : (
-        <div className="compare-empty-text compare-metrics-empty">Load a replay JSON file.</div>
-      )}
     </div>
   );
 }
@@ -202,6 +264,7 @@ export default function ResultCompare() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [patternMode, setPatternMode] = useState<'system' | 'vehicle'>('system');
+  const [selectedVehicleSegment, setSelectedVehicleSegment] = useState<VehiclePatternSelection | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadedReplays = useMemo(
@@ -274,6 +337,12 @@ export default function ResultCompare() {
 
   const canReplay = loadedReplays.length > 0 && timeRange.max > timeRange.min;
 
+  const handleSelectVehicleSegment = useCallback((selection: VehiclePatternSelection) => {
+    setSelectedVehicleSegment(selection);
+    setCurrentTime(selection.startTime);
+    setIsPlaying(false);
+  }, []);
+
   return (
     <div className="compare-layout">
       <aside className="compare-sidebar">
@@ -322,20 +391,36 @@ export default function ResultCompare() {
           </button>
         </div>
 
-        <ResultMetricsPanel side="left" replay={leftReplay} frame={leftFrame} />
-        <ResultMetricsPanel side="right" replay={rightReplay} frame={rightFrame} />
+        <ComparisonMetricsPanel
+          leftFrame={leftFrame}
+          rightFrame={rightFrame}
+        />
       </aside>
 
       <main className="compare-main">
         <div className="compare-map-grid">
-          <ResultMapPanel side="left" replay={leftReplay} frame={leftFrame} />
-          <ResultMapPanel side="right" replay={rightReplay} frame={rightFrame} />
+          <ResultMapPanel
+            side="left"
+            replay={leftReplay}
+            frame={leftFrame}
+            selectedSegment={selectedVehicleSegment}
+            onClearSelectedSegment={() => setSelectedVehicleSegment(null)}
+          />
+          <ResultMapPanel
+            side="right"
+            replay={rightReplay}
+            frame={rightFrame}
+            selectedSegment={selectedVehicleSegment}
+            onClearSelectedSegment={() => setSelectedVehicleSegment(null)}
+          />
         </div>
         {patternMode === 'vehicle' ? (
           <VehicleTemporalComparisonCharts
             resultA={leftReplay ? { frames: leftReplay.frames } : null}
             resultB={rightReplay ? { frames: rightReplay.frames } : null}
             currentTime={currentTime}
+            selectedSegment={selectedVehicleSegment}
+            onSelectSegment={handleSelectVehicleSegment}
           />
         ) : (
           <TemporalComparisonCharts
