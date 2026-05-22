@@ -1,4 +1,7 @@
 from collections import defaultdict
+from datetime import datetime, timezone
+import json
+import os
 
 import app.config as cfg
 from app.vehicle_status import VehicleStatus
@@ -21,15 +24,21 @@ STATUS_MAP_REQ = {
 }
 
 
-def sim_config_payload():
+def sim_config_payload(config=None, max_num_request=None):
+    config = cfg.DEFAULT_MODEL_CONFIG if config is None else config
+    max_num_request = 0 if max_num_request is None else max_num_request
     return {
         'maxNumVehicles': cfg.MAX_NUM_VEHICLES,
         'vehCapacity': cfg.VEH_CAPACITY,
-        'maxNumRequest': cfg.MAX_NUM_REQUEST,
+        'maxNumRequest': max_num_request,
         'maxWaitTime': cfg.MAX_WAIT_TIME,
-        'hiddenDim': cfg.HIDDEN_DIM,
-        'batchSize': cfg.BATCH_SIZE,
-        'learningRate': cfg.LEARNING_RATE,
+        'hiddenDim': config.get('hidden_dim'),
+        'batchSize': config.get('batch_size'),
+        'learningRate': config.get('learning_rate'),
+        'selectedScenario': config.get('scenario', 'S1'),
+        'availableScenarios': config.get('available_scenarios', ['S1', 'S2', 'S3', 'S4']),
+        'scenarioSeed': config.get('scenario_seed', 0),
+        'modelWeightFile': config.get('model_weight_file'),
     }
 
 
@@ -59,6 +68,15 @@ def extract_vehicle(v, environment):
     }
 
 
+def _request_cancellation_time(r):
+    cancel_at = getattr(r, 'cancel_at', None)
+    if cancel_at is not None:
+        return cancel_at
+    if r.status == RequestStatus.CANCELLED and r.waiting_time is not None and r.waiting_time >= 0:
+        return r.request_time + r.waiting_time
+    return None
+
+
 def extract_passenger(r):
     return {
         'id': r.id,
@@ -67,7 +85,7 @@ def extract_passenger(r):
         'requestTime': r.request_time,
         'pickupTime': r.pickup_at,
         'deliveryTime': r.dropoff_at,
-        'cancellationTime': r.cancel_at,
+        'cancellationTime': _request_cancellation_time(r),
         'status': STATUS_MAP_REQ.get(r.status, 'waiting'),
         'assignedVehicleId': (r.assigned_v_id + 1) if r.assigned_v_id >= 0 else None,
     }
@@ -172,11 +190,12 @@ def append_history_sample(environment, utilization_history, passenger_history, l
         passenger_history.pop(0)
 
 
-def build_state(environment, utilization_history=None, passenger_history=None):
+def build_state(environment, utilization_history=None, passenger_history=None, config=None):
     utilization_history = utilization_history or []
     passenger_history = passenger_history or []
 
     metrics = compute_metrics(environment)
+    max_num_request = len(getattr(environment, 'original_request_list', []) or [])
 
     active_passengers = [
         extract_passenger(r) for r in environment.active_request_list
@@ -194,7 +213,7 @@ def build_state(environment, utilization_history=None, passenger_history=None):
 
     return {
         'metrics': metrics,
-        **sim_config_payload(),
+        **sim_config_payload(config, max_num_request=max_num_request),
         'vehicles': [extract_vehicle(v, environment) for v in environment.vehicle_list],
         'passengers': visible_passengers,
         'waitTimeDistribution': compute_wait_time_distribution(environment),
@@ -203,3 +222,73 @@ def build_state(environment, utilization_history=None, passenger_history=None):
         'requestStatusData': compute_request_status(environment),
         'linkLoads': compute_link_loads(environment),
     }
+
+
+def json_default(obj):
+    if hasattr(obj, 'item'):
+        return obj.item()
+    if hasattr(obj, 'tolist'):
+        return obj.tolist()
+    raise TypeError(f'{type(obj).__name__} is not JSON serializable')
+
+
+def create_replay():
+    return {
+        'frames': [],
+        'utilizationHistory': [],
+        'passengerHistory': [],
+    }
+
+
+def capture_replay_frame(environment, replay, config=None, history_sample_interval=2):
+    if replay is None:
+        return
+
+    utilization_history = replay.setdefault('utilizationHistory', [])
+    passenger_history = replay.setdefault('passengerHistory', [])
+    curr_time = environment.curr_time
+
+    if curr_time > 0 and curr_time % history_sample_interval == 0:
+        if replay.get('lastHistorySampleTime') != curr_time:
+            append_history_sample(environment, utilization_history, passenger_history)
+            replay['lastHistorySampleTime'] = curr_time
+
+    replay.setdefault('frames', []).append(
+        build_state(
+            environment,
+            utilization_history=utilization_history,
+            passenger_history=passenger_history,
+            config=config,
+        )
+    )
+
+
+def build_simulation_replay_payload(
+    environment, replay, config=None, run_name='inference', version=1,
+    generated_at=None,
+):
+    generated_at = generated_at or datetime.now(timezone.utc).isoformat()
+    return {
+        'version': version,
+        'generatedAt': generated_at,
+        'runName': run_name,
+        'config': sim_config_payload(
+            config,
+            max_num_request=len(getattr(environment, 'original_request_list', []) or []),
+        ),
+        'frames': replay.get('frames', []),
+    }
+
+
+def save_simulation_replay_json(
+    path, environment, replay, config=None, run_name='inference',
+    filename='simulation_replay.json',
+):
+    os.makedirs(path, exist_ok=True)
+    payload = build_simulation_replay_payload(
+        environment, replay, config=config, run_name=run_name,
+    )
+    filepath = os.path.join(path, filename)
+    with open(filepath, mode='w', encoding='utf-8') as jsonfile:
+        json.dump(payload, jsonfile, ensure_ascii=False, indent=2, default=json_default)
+    return filepath

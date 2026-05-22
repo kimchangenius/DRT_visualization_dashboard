@@ -45,6 +45,7 @@ ENV/
 # Server runtime / large artifacts (필요 시 *.h5 줄 삭제 후 모델 커밋)
 /server/result/
 /server/data/*.h5
+/server/data/generated_scenarios/
 
 # Docker (로컬 전용)
 docker-compose.override.yml
