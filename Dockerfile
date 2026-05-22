@@ -7,6 +7,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY index.html tsconfig.json tsconfig.app.json tsconfig.node.json vite.config.ts ./
+COPY public ./public
 COPY src ./src
 RUN npm run build
 
@@ -14,5 +15,6 @@ FROM nginx:alpine
 
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
+COPY public/favicon.ico /usr/share/nginx/html/favicon.ico
 
 EXPOSE 8080
