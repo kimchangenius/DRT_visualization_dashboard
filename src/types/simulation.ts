@@ -76,6 +76,8 @@ export interface PassengerTimeSeriesPoint {
   cancelled: number;
 }
 
+export type DemandScenario = 'S1' | 'S2' | 'S3' | 'S4';
+
 export interface RequestStatusData {
   name: string;
   value: number;
@@ -90,6 +92,10 @@ export interface SimulationConfigPayload {
   hiddenDim: number;
   batchSize: number;
   learningRate: number;
+  selectedScenario: DemandScenario;
+  availableScenarios: DemandScenario[];
+  scenarioSeed: number;
+  modelWeightFile: string | null;
 }
 
 export interface SimulationState extends SimulationConfigPayload {
@@ -103,11 +109,11 @@ export interface SimulationState extends SimulationConfigPayload {
   linkLoads: Record<string, number>;
 }
 
-export type SimulationCommandType = 'start' | 'stop' | 'reset' | 'setSpeed';
+export type SimulationCommandType = 'start' | 'stop' | 'reset' | 'setSpeed' | 'setScenario';
 
 export interface SimulationCommand {
   type: SimulationCommandType;
-  payload?: number;
+  payload?: number | DemandScenario;
 }
 
 export interface SimulationConfig {

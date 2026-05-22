@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { SimulationConfigPayload, SimulationState } from '../types/simulation';
+import type { DemandScenario, SimulationConfigPayload, SimulationState } from '../types/simulation';
 import { getWsUrl, PLAYBACK_INTERVAL_MS } from '../config';
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
@@ -25,6 +25,10 @@ export const SIMULATION_INITIAL_STATE: SimulationState = {
   hiddenDim: 0,
   batchSize: 0,
   learningRate: 0,
+  selectedScenario: 'S1',
+  availableScenarios: ['S1', 'S2', 'S3', 'S4'],
+  scenarioSeed: 0,
+  modelWeightFile: null,
   vehicles: [],
   passengers: [],
   waitTimeDistribution: [],
@@ -156,7 +160,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     };
   }, [flushBuffer]);
 
-  const sendCommand = useCallback((type: string, payload?: number) => {
+  const sendCommand = useCallback((type: string, payload?: number | DemandScenario) => {
     socketRef.current?.emit('command', { type, payload });
   }, []);
 
@@ -168,9 +172,9 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     setSimFinished(false);
   }, []);
 
-  const start = useCallback(() => {
+  const start = useCallback((scenario?: DemandScenario) => {
     applyServerStateRef.current = true;
-    sendCommand('start');
+    sendCommand('start', scenario);
     setIsRunning(true);
     setSimFinished(false);
     startPlayback();
@@ -182,7 +186,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     setIsRunning(false);
   }, [sendCommand, stopPlayback]);
 
-  const reset = useCallback(() => {
+  const reset = useCallback((scenario?: DemandScenario) => {
     applyServerStateRef.current = false;
     flushBuffer();
     setState(prev => ({
@@ -194,8 +198,34 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
       hiddenDim: prev.hiddenDim,
       batchSize: prev.batchSize,
       learningRate: prev.learningRate,
+      selectedScenario: scenario ?? prev.selectedScenario,
+      availableScenarios: prev.availableScenarios,
+      scenarioSeed: prev.scenarioSeed,
+      modelWeightFile: prev.modelWeightFile,
     }));
-    sendCommand('reset');
+    sendCommand('reset', scenario);
+    setIsRunning(false);
+    setSimFinished(false);
+  }, [sendCommand, flushBuffer]);
+
+  const setScenario = useCallback((scenario: DemandScenario) => {
+    applyServerStateRef.current = false;
+    flushBuffer();
+    setState(prev => ({
+      ...SIMULATION_INITIAL_STATE,
+      maxNumVehicles: prev.maxNumVehicles,
+      vehCapacity: prev.vehCapacity,
+      maxNumRequest: prev.maxNumRequest,
+      maxWaitTime: prev.maxWaitTime,
+      hiddenDim: prev.hiddenDim,
+      batchSize: prev.batchSize,
+      learningRate: prev.learningRate,
+      selectedScenario: scenario,
+      availableScenarios: prev.availableScenarios,
+      scenarioSeed: prev.scenarioSeed,
+      modelWeightFile: prev.modelWeightFile,
+    }));
+    sendCommand('setScenario', scenario);
     setIsRunning(false);
     setSimFinished(false);
   }, [sendCommand, flushBuffer]);
@@ -216,6 +246,7 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     start,
     stop,
     reset,
+    setScenario,
     enterAnalysis,
     setSpeed,
   };

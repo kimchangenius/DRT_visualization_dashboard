@@ -15,6 +15,7 @@ import WaitTimeBarChart from './components/WaitTimeBarChart';
 import DetourFactorChart from './components/DetourFactorChart';
 import VehicleTimelineChart from './components/VehicleTimelineChart';
 import ResultCompare from './components/ResultCompare';
+import type { DemandScenario } from './types/simulation';
 import './App.css';
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
   );
 
   const [analysisEntered, setAnalysisEntered] = useState(false);
+  const [scenarioSelectionLocked, setScenarioSelectionLocked] = useState(false);
 
   const {
     state,
@@ -36,19 +38,29 @@ export default function App() {
     start,
     stop,
     reset: wsReset,
+    setScenario,
     enterAnalysis,
   } = useWebSocketSimulation({ onFrameConsumed });
 
   const handleStart = useCallback(() => {
+    setScenarioSelectionLocked(true);
     setAnalysisEntered(false);
-    start();
-  }, [start]);
+    start(state.selectedScenario);
+  }, [start, state.selectedScenario]);
 
   const reset = useCallback(() => {
     history.clearHistory();
-    wsReset();
+    wsReset(state.selectedScenario);
     setAnalysisEntered(false);
-  }, [history.clearHistory, wsReset]);
+    setScenarioSelectionLocked(false);
+  }, [history.clearHistory, wsReset, state.selectedScenario]);
+
+  const handleScenarioChange = useCallback((scenario: DemandScenario) => {
+    if (scenarioSelectionLocked) return;
+    history.clearHistory();
+    setScenario(scenario);
+    setAnalysisEntered(false);
+  }, [history.clearHistory, scenarioSelectionLocked, setScenario]);
 
   const handleEnterAnalysis = useCallback(() => {
     enterAnalysis();
@@ -124,6 +136,12 @@ export default function App() {
                 hiddenDim={state.hiddenDim}
                 batchSize={state.batchSize}
                 learningRate={state.learningRate}
+                selectedScenario={state.selectedScenario}
+                availableScenarios={state.availableScenarios}
+                scenarioSeed={state.scenarioSeed}
+                modelWeightFile={state.modelWeightFile}
+                scenarioSelectionLocked={scenarioSelectionLocked}
+                onScenarioChange={handleScenarioChange}
                 onStart={handleStart}
                 onStop={stop}
                 onReset={reset}

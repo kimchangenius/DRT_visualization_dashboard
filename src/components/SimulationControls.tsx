@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Vehicle, Passenger, VehicleAnalysisSummary } from '../types/simulation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { DemandScenario, Vehicle, Passenger, VehicleAnalysisSummary } from '../types/simulation';
 import { formatSimTime } from '../utils/time';
 
 interface SimulationControlsProps {
@@ -11,6 +11,12 @@ interface SimulationControlsProps {
   hiddenDim: number;
   batchSize: number;
   learningRate: number;
+  selectedScenario: DemandScenario;
+  availableScenarios: DemandScenario[];
+  scenarioSeed: number;
+  modelWeightFile: string | null;
+  scenarioSelectionLocked: boolean;
+  onScenarioChange: (scenario: DemandScenario) => void;
   onStart: () => void;
   onStop: () => void;
   onReset: () => void;
@@ -120,6 +126,27 @@ function waitSeverityColor(waitTime: number, threshold: number): string {
   return '#ef4444';
 }
 
+const SCENARIO_TOOLTIPS: Record<DemandScenario, { title: string; body: string }> = {
+  S1: {
+    title: 'S1 · 중앙 집중 수요',
+    body: '노드 10, 11, 14, 15에서 출발 수요가 높게 발생합니다. 중심부 고밀도 서비스 압박을 확인하기 좋습니다.',
+  },
+  S2: {
+    title: 'S2 · 진입부 편향 수요',
+    body: '노드 1, 3, 4에서 출발 수요가 높게 발생합니다. 네트워크 한쪽으로 몰리는 유입 패턴을 만듭니다.',
+  },
+  S3: {
+    title: 'S3 · 다중 거점 수요',
+    body: '노드 2, 5, 6, 13, 23, 24에서 출발 수요가 높게 발생합니다. 떨어진 여러 핫스팟을 동시에 테스트합니다.',
+  },
+  S4: {
+    title: 'S4 · 균일 기준 수요',
+    body: '특정 고수요 노드 없이 전체 네트워크에 수요가 고르게 분포합니다. 비교 기준 시나리오로 사용합니다.',
+  },
+};
+
+const SCENARIO_TOOLTIP_DURATION_MS = 5000;
+
 export default function SimulationControls({
   isRunning,
   maxNumVehicles,
@@ -128,6 +155,12 @@ export default function SimulationControls({
   hiddenDim,
   batchSize,
   learningRate,
+  selectedScenario,
+  availableScenarios,
+  scenarioSeed,
+  modelWeightFile,
+  scenarioSelectionLocked,
+  onScenarioChange,
   onStart,
   onStop,
   onReset,
@@ -148,6 +181,8 @@ export default function SimulationControls({
   maxWaitTimeThreshold = 10,
 }: SimulationControlsProps) {
   const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([]);
+  const [hoveredScenario, setHoveredScenario] = useState<DemandScenario | null>(null);
+  const scenarioTooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const toggleVehicleSelection = useCallback((id: number) => {
     setSelectedVehicleIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
@@ -170,6 +205,29 @@ export default function SimulationControls({
   );
 
   const vehicleButtonsDisabled = vehicles.length === 0;
+
+  const clearScenarioTooltipTimer = useCallback(() => {
+    if (scenarioTooltipTimerRef.current !== null) {
+      clearTimeout(scenarioTooltipTimerRef.current);
+      scenarioTooltipTimerRef.current = null;
+    }
+  }, []);
+
+  const showScenarioTooltip = useCallback((scenario: DemandScenario) => {
+    clearScenarioTooltipTimer();
+    setHoveredScenario(scenario);
+    scenarioTooltipTimerRef.current = setTimeout(() => {
+      setHoveredScenario(null);
+      scenarioTooltipTimerRef.current = null;
+    }, SCENARIO_TOOLTIP_DURATION_MS);
+  }, [clearScenarioTooltipTimer]);
+
+  const hideScenarioTooltip = useCallback(() => {
+    clearScenarioTooltipTimer();
+    setHoveredScenario(null);
+  }, [clearScenarioTooltipTimer]);
+
+  useEffect(() => () => clearScenarioTooltipTimer(), [clearScenarioTooltipTimer]);
 
   const handleAnalysisVehicleClick = useCallback((id: number) => {
     onSelectAnalysisVehicle(analysisVehicleId === id ? null : id);
@@ -203,6 +261,40 @@ export default function SimulationControls({
           <button type="button" className="btn btn-danger" onClick={onReset}>
             ↺ Reset
           </button>
+        </div>
+
+        <div className="scenario-control" aria-label="Demand scenario selection">
+          <div className="scenario-control-head">
+            <span>Demand Scenario</span>
+          </div>
+          <div className="scenario-options" role="group" aria-label="Demand scenarios">
+            {availableScenarios.map(scenario => (
+              <div
+                key={scenario}
+                className="scenario-option-wrap"
+                onMouseEnter={() => showScenarioTooltip(scenario)}
+                onMouseLeave={hideScenarioTooltip}
+                onFocus={() => showScenarioTooltip(scenario)}
+                onBlur={hideScenarioTooltip}
+              >
+                <button
+                  type="button"
+                  className={`scenario-option${selectedScenario === scenario ? ' is-active' : ''}`}
+                  onClick={() => onScenarioChange(scenario)}
+                  disabled={scenarioSelectionLocked || isRunning || selectedScenario === scenario}
+                  aria-describedby={hoveredScenario === scenario ? 'scenario-tooltip' : undefined}
+                >
+                  {scenario}
+                </button>
+              </div>
+            ))}
+          </div>
+          {hoveredScenario ? (
+            <div id="scenario-tooltip" className="scenario-tooltip" role="tooltip">
+              <strong>{SCENARIO_TOOLTIPS[hoveredScenario].title}</strong>
+              <span>{SCENARIO_TOOLTIPS[hoveredScenario].body}</span>
+            </div>
+          ) : null}
         </div>
 
         <div className={`control-config${inAnalysisMode ? ' in-analysis' : ''}`}>
