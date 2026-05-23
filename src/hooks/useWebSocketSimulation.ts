@@ -46,6 +46,7 @@ export interface WebSocketSimulationOptions {
 export function useWebSocketSimulation(options: WebSocketSimulationOptions = {}) {
   const socketRef = useRef<Socket | null>(null);
   const applyServerStateRef = useRef(false);
+  const serverDonePendingRef = useRef(false);
   const [state, setState] = useState<SimulationState>(SIMULATION_INITIAL_STATE);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
@@ -68,6 +69,16 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
   const flushBuffer = useCallback(() => {
     stopPlayback();
     bufferRef.current = [];
+    serverDonePendingRef.current = false;
+  }, [stopPlayback]);
+
+  const completeServerDone = useCallback(() => {
+    stopPlayback();
+    bufferRef.current = [];
+    serverDonePendingRef.current = false;
+    applyServerStateRef.current = false;
+    setIsRunning(false);
+    setSimFinished(true);
   }, [stopPlayback]);
 
   const startPlayback = useCallback(() => {
@@ -77,9 +88,16 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
       if (next) {
         setState(next);
         onFrameConsumedRef.current?.(next);
+        if (serverDonePendingRef.current && bufferRef.current.length === 0) {
+          completeServerDone();
+        }
+        return;
+      }
+      if (serverDonePendingRef.current) {
+        completeServerDone();
       }
     }, PLAYBACK_INTERVAL_MS);
-  }, []);
+  }, [completeServerDone]);
 
   useEffect(() => {
     const socket = io(getWsUrl(), {
@@ -137,20 +155,12 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
     });
 
     socket.on('sim_done', () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      serverDonePendingRef.current = true;
+      if (bufferRef.current.length === 0) {
+        completeServerDone();
+      } else {
+        startPlayback();
       }
-      for (const frame of bufferRef.current) {
-        onFrameConsumedRef.current?.(frame);
-      }
-      const last = bufferRef.current[bufferRef.current.length - 1];
-      if (last) {
-        setState(last);
-      }
-      bufferRef.current = [];
-      setIsRunning(false);
-      setSimFinished(true);
     });
 
     return () => {
@@ -158,21 +168,20 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
       socketRef.current = null;
       flushBuffer();
     };
-  }, [flushBuffer]);
+  }, [completeServerDone, flushBuffer, startPlayback]);
 
   const sendCommand = useCallback((type: string, payload?: number | DemandScenario) => {
     socketRef.current?.emit('command', { type, payload });
   }, []);
 
   const enterAnalysis = useCallback(() => {
-    for (const frame of bufferRef.current) {
-      onFrameConsumedRef.current?.(frame);
-    }
+    stopPlayback();
+    serverDonePendingRef.current = false;
     bufferRef.current = [];
-    setSimFinished(false);
-  }, []);
+  }, [stopPlayback]);
 
   const start = useCallback((scenario?: DemandScenario) => {
+    serverDonePendingRef.current = false;
     applyServerStateRef.current = true;
     sendCommand('start', scenario);
     setIsRunning(true);
@@ -182,9 +191,10 @@ export function useWebSocketSimulation(options: WebSocketSimulationOptions = {})
 
   const stop = useCallback(() => {
     sendCommand('stop');
-    stopPlayback();
+    applyServerStateRef.current = false;
+    flushBuffer();
     setIsRunning(false);
-  }, [sendCommand, stopPlayback]);
+  }, [flushBuffer, sendCommand]);
 
   const reset = useCallback((scenario?: DemandScenario) => {
     applyServerStateRef.current = false;

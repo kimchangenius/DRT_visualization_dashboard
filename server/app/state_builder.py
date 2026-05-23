@@ -82,6 +82,7 @@ def extract_passenger(r):
         'id': r.id,
         'originNodeId': r.from_node_id,
         'destinationNodeId': r.to_node_id,
+        'directTravelTime': r.travel_time,
         'requestTime': r.request_time,
         'pickupTime': r.pickup_at,
         'deliveryTime': r.dropoff_at,

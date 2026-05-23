@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   SimulationState,
   SimulationMetrics,
+  SimulationConfigPayload,
+  SimulationReplayPayload,
   Passenger,
   Vehicle,
   VehicleAnalysis,
@@ -29,14 +31,20 @@ export function useSimulationHistory() {
   const [vehicleIds, setVehicleIds] = useState<number[]>([]);
 
   const addFrame = useCallback((state: SimulationState) => {
-    framesRef.current.push(state);
-    if (!hasHistory) setHasHistory(true);
+    const lastIndex = framesRef.current.length - 1;
+    const lastFrame = lastIndex >= 0 ? framesRef.current[lastIndex] : null;
+    if (lastFrame?.metrics.currentTime === state.metrics.currentTime) {
+      framesRef.current[lastIndex] = state;
+    } else {
+      framesRef.current.push(state);
+    }
+    setHasHistory(true);
     for (const v of state.vehicles) {
       vehicleIdSetRef.current.add(v.id);
     }
     setVehicleIds(Array.from(vehicleIdSetRef.current).sort((a, b) => a - b));
     setFrameCount(c => c + 1);
-  }, [hasHistory]);
+  }, []);
 
   const clearHistory = useCallback(() => {
     framesRef.current = [];
@@ -58,9 +66,28 @@ export function useSimulationHistory() {
   const timeRange = useMemo(() => {
     if (framesRef.current.length === 0) return { min: 0, max: 0 };
     const times = framesRef.current.map(f => f.metrics.currentTime);
-    return { min: Math.min(...times), max: Math.max(...times) };
+    return { min: 0, max: Math.max(...times) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameCount]);
+
+  const buildReplayPayload = useCallback((
+    config: SimulationConfigPayload,
+    runName: string,
+    maxTime?: number,
+  ): SimulationReplayPayload | null => {
+    const frames = maxTime == null
+      ? [...framesRef.current]
+      : framesRef.current.filter(frame => frame.metrics.currentTime <= maxTime);
+    if (frames.length === 0) return null;
+
+    return {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      runName,
+      config,
+      frames,
+    };
+  }, []);
 
   const toggleReplay = useCallback(() => {
     setIsReplaying(prev => !prev);
@@ -165,11 +192,14 @@ export function useSimulationHistory() {
     for (const p of assignedPassengers) {
       if (p.pickupTime != null && p.deliveryTime != null) {
         const actualTravelTime = p.deliveryTime - p.pickupTime;
-        const directTravelTime = shortestTravelTime(p.originNodeId, p.destinationNodeId);
+        const directTravelTime = (p.directTravelTime != null && p.directTravelTime > 0)
+          ? p.directTravelTime
+          : shortestTravelTime(p.originNodeId, p.destinationNodeId);
         if (directTravelTime != null && directTravelTime > 0) {
+          const detourFactor = Math.round((actualTravelTime / directTravelTime) * 100) / 100;
           detourFactorData.push({
             passengerId: p.id,
-            detourFactor: Math.round((actualTravelTime / directTravelTime) * 100) / 100,
+            detourFactor: Math.max(1, detourFactor),
             actualTravelTime,
             directTravelTime,
             deliveryTime: p.deliveryTime,
@@ -301,5 +331,6 @@ export function useSimulationHistory() {
     isReplaying,
     toggleReplay,
     timeRange,
+    buildReplayPayload,
   };
 }

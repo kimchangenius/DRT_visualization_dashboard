@@ -31,7 +31,7 @@ export default function VehicleRequestOperation({
     assignedPassengers
       .filter(p => p.requestTime <= replayTime)
       .slice()
-      .sort((a, b) => a.requestTime - b.requestTime || a.id - b.id),
+      .sort((a, b) => b.requestTime - a.requestTime || b.id - a.id),
     [assignedPassengers, replayTime],
   );
 

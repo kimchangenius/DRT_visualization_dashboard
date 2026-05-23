@@ -20,7 +20,7 @@ interface VehicleTemporalComparisonChartsProps {
   resultA: ReplayVehicleSource | null;
   resultB: ReplayVehicleSource | null;
   currentTime: number;
-  selectedSegment: VehiclePatternSelection | null;
+  selectedSegments: Record<'left' | 'right', VehiclePatternSelection | null>;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
 }
 
@@ -404,7 +404,7 @@ export default function VehicleTemporalComparisonCharts({
   resultA,
   resultB,
   currentTime,
-  selectedSegment,
+  selectedSegments,
   onSelectSegment,
 }: VehicleTemporalComparisonChartsProps) {
   const vehicleIds = vehicleIdsForSources(resultA, resultB);
@@ -445,7 +445,7 @@ export default function VehicleTemporalComparisonCharts({
           source={resultA}
           vehicleIds={vehicleIds}
           currentTime={currentTime}
-          selectedSegment={selectedSegment}
+          selectedSegment={selectedSegments.left}
           onSelectSegment={onSelectSegment}
         />
         <ResultVehicleCard
@@ -455,7 +455,7 @@ export default function VehicleTemporalComparisonCharts({
           source={resultB}
           vehicleIds={vehicleIds}
           currentTime={currentTime}
-          selectedSegment={selectedSegment}
+          selectedSegment={selectedSegments.right}
           onSelectSegment={onSelectSegment}
         />
       </div>

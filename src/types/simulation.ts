@@ -33,6 +33,7 @@ export interface Passenger {
   id: number;
   originNodeId: number;
   destinationNodeId: number;
+  directTravelTime?: number | null;
   requestTime: number;
   pickupTime: number | null;
   deliveryTime: number | null;
@@ -107,6 +108,14 @@ export interface SimulationState extends SimulationConfigPayload {
   passengerHistory: PassengerTimeSeriesPoint[];
   requestStatusData: RequestStatusData[];
   linkLoads: Record<string, number>;
+}
+
+export interface SimulationReplayPayload {
+  version: 1;
+  generatedAt: string;
+  runName: string;
+  config: SimulationConfigPayload;
+  frames: SimulationState[];
 }
 
 export type SimulationCommandType = 'start' | 'stop' | 'reset' | 'setSpeed' | 'setScenario';

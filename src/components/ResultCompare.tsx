@@ -264,7 +264,10 @@ export default function ResultCompare() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [patternMode, setPatternMode] = useState<'system' | 'vehicle'>('system');
-  const [selectedVehicleSegment, setSelectedVehicleSegment] = useState<VehiclePatternSelection | null>(null);
+  const [selectedVehicleSegments, setSelectedVehicleSegments] = useState<Record<ReplaySide, VehiclePatternSelection | null>>({
+    left: null,
+    right: null,
+  });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadedReplays = useMemo(
@@ -289,6 +292,7 @@ export default function ResultCompare() {
     const setError = side === 'left' ? setLeftError : setRightError;
 
     setError(null);
+    setSelectedVehicleSegments(prev => ({ ...prev, [side]: null }));
     reader.onload = () => {
       try {
         const text = typeof reader.result === 'string' ? reader.result : '';
@@ -316,7 +320,9 @@ export default function ResultCompare() {
   }, [loadedReplays.length, timeRange.min, timeRange.max]);
 
   useEffect(() => {
-    if (isPlaying) setSelectedVehicleSegment(null);
+    if (isPlaying) {
+      setSelectedVehicleSegments({ left: null, right: null });
+    }
   }, [isPlaying]);
 
   useEffect(() => {
@@ -342,7 +348,14 @@ export default function ResultCompare() {
   const canReplay = loadedReplays.length > 0 && timeRange.max > timeRange.min;
 
   const handleSelectVehicleSegment = useCallback((selection: VehiclePatternSelection) => {
-    setSelectedVehicleSegment(selection);
+    setSelectedVehicleSegments(prev => ({
+      ...prev,
+      [selection.resultSide]: selection,
+    }));
+  }, []);
+
+  const clearVehicleSegment = useCallback((side: ReplaySide) => {
+    setSelectedVehicleSegments(prev => ({ ...prev, [side]: null }));
   }, []);
 
   return (
@@ -405,15 +418,15 @@ export default function ResultCompare() {
             side="left"
             replay={leftReplay}
             frame={leftFrame}
-            selectedSegment={selectedVehicleSegment}
-            onClearSelectedSegment={() => setSelectedVehicleSegment(null)}
+            selectedSegment={selectedVehicleSegments.left}
+            onClearSelectedSegment={() => clearVehicleSegment('left')}
           />
           <ResultMapPanel
             side="right"
             replay={rightReplay}
             frame={rightFrame}
-            selectedSegment={selectedVehicleSegment}
-            onClearSelectedSegment={() => setSelectedVehicleSegment(null)}
+            selectedSegment={selectedVehicleSegments.right}
+            onClearSelectedSegment={() => clearVehicleSegment('right')}
           />
         </div>
         {patternMode === 'vehicle' ? (
@@ -421,7 +434,7 @@ export default function ResultCompare() {
             resultA={leftReplay ? { frames: leftReplay.frames } : null}
             resultB={rightReplay ? { frames: rightReplay.frames } : null}
             currentTime={currentTime}
-            selectedSegment={selectedVehicleSegment}
+            selectedSegments={selectedVehicleSegments}
             onSelectSegment={handleSelectVehicleSegment}
           />
         ) : (
