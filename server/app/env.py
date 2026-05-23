@@ -464,4 +464,12 @@ class RideSharingEnvironment:
         return self._request_travel_time(request) + float(cfg.MAX_INVEHICLE_TIME)
 
     def is_done(self):
-        return len(self.active_request_list) == 0 and len(self.future_request_list) == 0
+        has_busy_vehicle = any(
+            vehicle.status not in (VehicleStatus.IDLE, VehicleStatus.REJECT)
+            for vehicle in self.vehicle_list
+        )
+        return (
+            len(self.active_request_list) == 0
+            and len(self.future_request_list) == 0
+            and not has_busy_vehicle
+        )

@@ -25,9 +25,16 @@ function MetricCard({ label, value, unit, color }: MetricCardProps) {
 }
 
 export default function MetricsPanel({ metrics, accentColor }: MetricsPanelProps) {
+  const cancelledCount = metrics.cancelCount ?? 0;
+  const completedCount = metrics.totalPassengersServed + cancelledCount;
+  const serviceRate = completedCount > 0
+    ? Math.round((metrics.totalPassengersServed / completedCount) * 1000) / 10
+    : 0;
+
   const colors = {
     activeVehicles: accentColor ?? '#3b82f6',
     served: accentColor ?? '#10b981',
+    serviceRate: accentColor ?? '#22c55e',
     averageWait: accentColor ?? '#f59e0b',
     averageTravel: accentColor ?? '#8b5cf6',
     canceled: accentColor ?? '#ec4899',
@@ -47,6 +54,17 @@ export default function MetricsPanel({ metrics, accentColor }: MetricsPanelProps
         color={colors.served}
       />
       <MetricCard
+        label="Canceled Count"
+        value={cancelledCount}
+        color={colors.canceled}
+      />
+      <MetricCard
+        label="Service Rate"
+        value={serviceRate.toFixed(1)}
+        unit="%"
+        color={colors.serviceRate}
+      />
+      <MetricCard
         label="Average Wait Time"
         value={metrics.averageWaitTime}
         unit=" min"
@@ -57,11 +75,6 @@ export default function MetricsPanel({ metrics, accentColor }: MetricsPanelProps
         value={metrics.averageTravelTime}
         unit=" min"
         color={colors.averageTravel}
-      />
-      <MetricCard
-        label="Canceled Count"
-        value={metrics.cancelCount ?? 0}
-        color={colors.canceled}
       />
       <MetricCard
         label="Waiting Passengers"

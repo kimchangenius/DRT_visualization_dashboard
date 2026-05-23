@@ -15,7 +15,8 @@ import WaitTimeBarChart from './components/WaitTimeBarChart';
 import DetourFactorChart from './components/DetourFactorChart';
 import VehicleTimelineChart from './components/VehicleTimelineChart';
 import ResultCompare from './components/ResultCompare';
-import type { DemandScenario } from './types/simulation';
+import type { DemandScenario, SimulationConfigPayload } from './types/simulation';
+import { saveReplayJson } from './utils/saveReplay';
 import './App.css';
 
 export default function App() {
@@ -29,6 +30,7 @@ export default function App() {
 
   const [analysisEntered, setAnalysisEntered] = useState(false);
   const [scenarioSelectionLocked, setScenarioSelectionLocked] = useState(false);
+  const [isSavingReplay, setIsSavingReplay] = useState(false);
 
   const {
     state,
@@ -67,6 +69,53 @@ export default function App() {
     setAnalysisEntered(true);
     history.setReplayTime(0);
   }, [enterAnalysis, history.setReplayTime]);
+
+  const handleSaveReplay = useCallback(async () => {
+    const config: SimulationConfigPayload = {
+      maxNumVehicles: state.maxNumVehicles,
+      vehCapacity: state.vehCapacity,
+      maxNumRequest: state.maxNumRequest,
+      maxWaitTime: state.maxWaitTime,
+      hiddenDim: state.hiddenDim,
+      batchSize: state.batchSize,
+      learningRate: state.learningRate,
+      selectedScenario: state.selectedScenario,
+      availableScenarios: state.availableScenarios,
+      scenarioSeed: state.scenarioSeed,
+      modelWeightFile: state.modelWeightFile,
+    };
+    const payload = history.buildReplayPayload(
+      config,
+      `live_${state.selectedScenario}_seed${state.scenarioSeed}_t${state.metrics.currentTime}`,
+      state.metrics.currentTime,
+    );
+    if (!payload) return;
+
+    setIsSavingReplay(true);
+    try {
+      await saveReplayJson(payload, `replay_${state.selectedScenario}.json`);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.error('Failed to save replay JSON.', error);
+      }
+    } finally {
+      setIsSavingReplay(false);
+    }
+  }, [
+    history.buildReplayPayload,
+    state.availableScenarios,
+    state.batchSize,
+    state.hiddenDim,
+    state.learningRate,
+    state.maxNumRequest,
+    state.maxNumVehicles,
+    state.maxWaitTime,
+    state.metrics.currentTime,
+    state.modelWeightFile,
+    state.scenarioSeed,
+    state.selectedScenario,
+    state.vehCapacity,
+  ]);
 
   // Analysis 버튼 활성: 시뮬레이션 멈춰있고 히스토리 있고 아직 분석모드 미진입
   const canEnterAnalysis = !isRunning && history.hasHistory && !analysisEntered;
@@ -145,6 +194,9 @@ export default function App() {
                 onStart={handleStart}
                 onStop={stop}
                 onReset={reset}
+                canSaveReplay={!isRunning && history.hasHistory}
+                isSavingReplay={isSavingReplay}
+                onSaveReplay={handleSaveReplay}
                 canEnterAnalysis={canEnterAnalysis}
                 inAnalysisMode={inAnalysisMode}
                 onEnterAnalysis={handleEnterAnalysis}
@@ -203,6 +255,7 @@ export default function App() {
               <VehicleTimelineChart
                 data={history.analysis.timelineData}
                 replayTime={history.replayTime}
+                statusShare={history.analysis.summary}
               />
             </>
           ) : (

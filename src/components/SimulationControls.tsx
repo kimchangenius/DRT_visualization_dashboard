@@ -20,6 +20,9 @@ interface SimulationControlsProps {
   onStart: () => void;
   onStop: () => void;
   onReset: () => void;
+  canSaveReplay: boolean;
+  isSavingReplay: boolean;
+  onSaveReplay: () => void;
   canEnterAnalysis: boolean;
   inAnalysisMode: boolean;
   onEnterAnalysis: () => void;
@@ -63,8 +66,15 @@ function passengerById(passengers: Passenger[], id: number | null): Passenger | 
 }
 
 function requestSummary(p: Passenger): string {
-  return `#${p.id} ${p.originNodeId}→${p.destinationNodeId} · ${p.status} · req_t=${p.requestTime}`;
+  return `P${p.id} | N${p.originNodeId}→N${p.destinationNodeId} · ${p.status} · t=${p.requestTime}`;
 }
+
+const VEHICLE_STATUS_LABELS: Record<Vehicle['status'], string> = {
+  idle: 'Idle',
+  picking_up: 'Picking up',
+  carrying: 'Carrying',
+  repositioning: 'Repositioning',
+};
 
 function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passengers: Passenger[] }) {
   const accepted = acceptedRequestsForVehicle(vehicle.id, passengers);
@@ -82,38 +92,54 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
     }
   }
 
+  const targetLabel = vehicle.targetNodeId != null ? `N${vehicle.targetNodeId}` : '-';
+  const activeLoad = passengers.filter(
+    p => p.assignedVehicleId === vehicle.id && p.status === 'picked_up',
+  ).length;
+
   return (
-    <div className="control-vehicle-status-card">
-      <div className="control-vehicle-status-card-head">Vehicle {vehicle.id}</div>
-      <dl className="control-vehicle-status-dl">
-        <div className="control-vehicle-status-row">
-          <dt>curr_node</dt>
-          <dd>
-            {vehicle.currentNodeId}
-            {vehicle.targetNodeId != null ? (
-              <span className="control-vehicle-status-sub"> → target {vehicle.targetNodeId}</span>
-            ) : null}
-          </dd>
+    <div className={`control-vehicle-status-card status-${vehicle.status}`}>
+      <div className="control-vehicle-status-card-head">
+        <div>
+          <span className="control-vehicle-status-kicker">Vehicle</span>
+          <strong>V{vehicle.id}</strong>
         </div>
-        <div className="control-vehicle-status-row">
-          <dt>Action status</dt>
-          <dd>{vehicle.status}</dd>
+        <span className="control-vehicle-status-badge">
+          {VEHICLE_STATUS_LABELS[vehicle.status]}
+        </span>
+      </div>
+
+      <div className="control-vehicle-status-metrics">
+        <div>
+          <span>Current</span>
+          <strong>N{vehicle.currentNodeId}</strong>
         </div>
-        <div className="control-vehicle-status-row control-vehicle-status-row-block">
-          <dt>Accepted request info</dt>
-          <dd>
-            {lines.length === 0 ? (
-              <span className="control-vehicle-status-empty">—</span>
-            ) : (
-              <ul className="control-vehicle-request-list">
-                {lines.map(p => (
-                  <li key={p.id}>{requestSummary(p)}</li>
-                ))}
-              </ul>
-            )}
-          </dd>
+        <div>
+          <span>Target</span>
+          <strong>{targetLabel}</strong>
         </div>
-      </dl>
+        <div>
+          <span>Load</span>
+          <strong>{activeLoad}</strong>
+        </div>
+        <div>
+          <span>Trips</span>
+          <strong>{vehicle.totalTrips}</strong>
+        </div>
+      </div>
+
+      <div className="control-vehicle-request-block">
+        <div className="control-vehicle-request-title">Accepted Requests</div>
+        {lines.length === 0 ? (
+          <span className="control-vehicle-status-empty">No active request</span>
+        ) : (
+          <ul className="control-vehicle-request-list">
+            {lines.map(p => (
+              <li key={p.id}>{requestSummary(p)}</li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -164,6 +190,9 @@ export default function SimulationControls({
   onStart,
   onStop,
   onReset,
+  canSaveReplay,
+  isSavingReplay,
+  onSaveReplay,
   canEnterAnalysis,
   inAnalysisMode,
   onEnterAnalysis,
@@ -257,6 +286,14 @@ export default function SimulationControls({
             aria-label={inAnalysisMode ? 'Analysis mode active' : 'Enter analysis mode'}
           >
             Analysis
+          </button>
+          <button
+            type="button"
+            className="btn btn-save"
+            onClick={onSaveReplay}
+            disabled={!canSaveReplay || isSavingReplay}
+          >
+            {isSavingReplay ? 'Saving' : 'Save Replay'}
           </button>
           <button type="button" className="btn btn-danger" onClick={onReset}>
             ↺ Reset
@@ -413,8 +450,8 @@ export default function SimulationControls({
                     <div className="analysis-section-title">Service Quality</div>
                     <div className="analysis-summary-grid">
                       <div className="stat-item">
-                        <span className="stat-label">Service Rate</span>
-                        <span className="stat-value">{analysisSummary.serviceRate.toFixed(1)}%</span>
+                        <span className="stat-label">Served</span>
+                        <span className="stat-value">{analysisSummary.servedPassengers}</span>
                       </div>
                       <div className="stat-item">
                         <span className="stat-label">Avg Wait</span>
@@ -432,15 +469,6 @@ export default function SimulationControls({
                         </span>
                       </div>
                       <div className="stat-item">
-                        <span className="stat-label">Cancel Count</span>
-                        <span
-                          className="stat-value"
-                          style={{ color: analysisSummary.cancelledPassengers > 0 ? '#ef4444' : undefined }}
-                        >
-                          {analysisSummary.cancelledPassengers}
-                        </span>
-                      </div>
-                      <div className="stat-item">
                         <span className="stat-label">Avg Detour</span>
                         <span className="stat-value">×{analysisSummary.avgDetourFactor.toFixed(2)}</span>
                       </div>
@@ -448,47 +476,21 @@ export default function SimulationControls({
                   </div>
 
                   <div className="analysis-section">
-                    <div className="analysis-section-title">Vehicle Utilization</div>
+                    <div className="analysis-section-title">Vehicle Operation</div>
                     <div className="analysis-summary-grid">
                       <div className="stat-item">
-                        <span className="stat-label">Effective Util.</span>
+                        <span className="stat-label">Trips</span>
+                        <span className="stat-value">{analysisSummary.totalTrips}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Dist / Trip</span>
+                        <span className="stat-value">{analysisSummary.distancePerTrip.toFixed(1)}</span>
+                      </div>
+                      <div className="stat-item">
+                        <span className="stat-label">Carrying Share</span>
                         <span className="stat-value" style={{ color: '#10b981' }}>
                           {analysisSummary.carryingPct}%
                         </span>
-                      </div>
-                      <div className="stat-item stat-item-wide">
-                        <span className="stat-label">Status Share</span>
-                        <div className="stat-bar">
-                          <div
-                            className="stat-bar-seg"
-                            style={{ width: `${analysisSummary.idlePct}%`, background: '#3b82f6' }}
-                            title={`Idle ${analysisSummary.idlePct}%`}
-                          />
-                          <div
-                            className="stat-bar-seg"
-                            style={{ width: `${analysisSummary.pickupPct}%`, background: '#f59e0b' }}
-                            title={`Pickup ${analysisSummary.pickupPct}%`}
-                          />
-                          <div
-                            className="stat-bar-seg"
-                            style={{ width: `${analysisSummary.carryingPct}%`, background: '#10b981' }}
-                            title={`Carrying ${analysisSummary.carryingPct}%`}
-                          />
-                        </div>
-                        <div className="stat-bar-legend">
-                          <span className="stat-bar-legend-item">
-                            <span className="stat-bar-legend-dot" style={{ background: '#3b82f6' }} />
-                            Idle {analysisSummary.idlePct}%
-                          </span>
-                          <span className="stat-bar-legend-item">
-                            <span className="stat-bar-legend-dot" style={{ background: '#f59e0b' }} />
-                            Pickup {analysisSummary.pickupPct}%
-                          </span>
-                          <span className="stat-bar-legend-item">
-                            <span className="stat-bar-legend-dot" style={{ background: '#10b981' }} />
-                            Carrying {analysisSummary.carryingPct}%
-                          </span>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -497,7 +499,7 @@ export default function SimulationControls({
             </div>
           ) : (
             <div className="control-vehicles">
-              <div className="control-vehicles-title">Vehicles Information</div>
+              <div className="control-vehicles-title">Vehicle Information</div>
               {vehicles.length === 0 ? (
                 <p className="control-vehicles-hint">The list of vehicles running in the simulation is displayed here.</p>
               ) : (

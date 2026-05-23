@@ -31,7 +31,8 @@ export default function DetourFactorChart({ data, replayTime }: DetourFactorChar
               <YAxis
                 stroke="#94a3b8"
                 fontSize={10}
-                domain={[0, 'auto']}
+                domain={[1, 'auto']}
+                tickFormatter={(value) => (Number(value) <= 1 ? '' : `${value}`)}
                 label={{ value: 'Factor', angle: -90, position: 'insideLeft', offset: 15, fill: '#94a3b8', fontSize: 9 }}
               />
               <Tooltip

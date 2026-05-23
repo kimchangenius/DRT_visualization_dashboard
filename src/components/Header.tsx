@@ -28,7 +28,6 @@ export default function Header({ currentTime, connectionStatus, reconnectAttempt
     <header className="dashboard-header">
       <div className="header-title">
         <h1>DRT Simulation Dashboard</h1>
-        <span className="header-subtitle">DDQN-based simulation</span>
       </div>
       <div className="header-info">
         <div className="sim-time">

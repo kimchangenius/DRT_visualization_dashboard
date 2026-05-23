@@ -35,6 +35,7 @@ SCENARIO_HORIZON = int(os.environ.get('DRT_SCENARIO_HORIZON', DEFAULT_SCENARIO_P
 SCENARIO_LAMBDA_BASE = float(os.environ.get('DRT_SCENARIO_LAMBDA_BASE', DEFAULT_SCENARIO_PARAMS.get('lambda_base', 1.0)))
 SCENARIO_LAMBDA_HIGH = float(os.environ.get('DRT_SCENARIO_LAMBDA_HIGH', DEFAULT_SCENARIO_PARAMS.get('lambda_high', 6.0)))
 SCENARIO_POP_P = float(os.environ.get('DRT_SCENARIO_POP_P', DEFAULT_SCENARIO_PARAMS.get('pop_p', 0.75)))
+SIM_TICK_SECONDS = float(os.environ.get('DRT_SIM_TICK_SECONDS', '1.0'))
 
 flask_app = Flask(__name__)
 CORS(flask_app, resources={r"/*": {"origins": "*"}})
@@ -66,12 +67,14 @@ def normalize_scenario(value):
 
 
 def scenario_config():
+    model_path = resolve_model_path()
     return {
         **MODEL_CONFIG,
         'scenario': selected_scenario,
         'scenario_seed': SCENARIO_SEED,
         'n_req': SCENARIO_N_REQ,
         'horizon': SCENARIO_HORIZON,
+        'model_weight_file': os.path.basename(model_path) if model_path else None,
     }
 
 
@@ -186,7 +189,6 @@ def dashboard_state():
     state.update(scenario_payload())
     return state
 
-
 # --------------- Simulation Loop ---------------
 
 def reset_simulation(scenario=None):
@@ -261,7 +263,8 @@ def simulation_loop():
             socketio.emit('sim_done', {})
             break
 
-        interval = max(0.05, 0.5 / sim_speed)
+        speed = sim_speed if isinstance(sim_speed, (int, float)) and sim_speed > 0 else 1
+        interval = max(0.05, SIM_TICK_SECONDS / speed)
         time.sleep(interval)
 
 
@@ -295,7 +298,7 @@ def handle_command(data):
             if env is None or env.is_done() or scenario != selected_scenario:
                 reset_simulation(scenario)
                 emit('sim_meta', meta_payload())
-                emit('state', dashboard_state())
+            emit('state', dashboard_state())
             sim_running = True
             scenario_locked = True
             sim_thread = threading.Thread(target=simulation_loop, daemon=True)
