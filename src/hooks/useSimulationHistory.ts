@@ -19,6 +19,90 @@ import { shortestTravelTime } from '../data/siouxFallsNetwork';
 import { PLAYBACK_INTERVAL_MS } from '../config';
 import { frameAtOrBefore } from '../utils/replay';
 
+type StatusShare = Pick<VehicleAnalysisSummary, 'idlePct' | 'pickupPct' | 'carryingPct'>;
+
+function getOrderedFrames(frames: SimulationState[]): SimulationState[] {
+  const framesByTime = new Map<number, SimulationState>();
+  for (const frame of frames) {
+    framesByTime.set(frame.metrics.currentTime, frame);
+  }
+  return Array.from(framesByTime.values()).sort(
+    (a, b) => a.metrics.currentTime - b.metrics.currentTime,
+  );
+}
+
+function collectEdgeAnalysis(frames: SimulationState[], vehicleId: number) {
+  const edgeSet = new Set<string>();
+  const routeEdges: [number, number][] = [];
+  const edgeCountMap = new Map<string, EdgeTraversal>();
+  let lastPathSig = '';
+
+  for (const frame of frames) {
+    const v = frame.vehicles.find(veh => veh.id === vehicleId);
+    if (!v || v.path.length < 2) continue;
+
+    const pathSig = `${v.path.join('|')}-${v.status}`;
+    if (pathSig === lastPathSig) continue;
+    lastPathSig = pathSig;
+
+    for (let i = 0; i < v.path.length - 1; i++) {
+      const a = v.path[i];
+      const b = v.path[i + 1];
+      const key = `${a}-${b}`;
+      if (!edgeSet.has(key)) {
+        edgeSet.add(key);
+        routeEdges.push([a, b]);
+      }
+      const existing = edgeCountMap.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        edgeCountMap.set(key, { from: a, to: b, count: 1 });
+      }
+    }
+  }
+
+  return {
+    routeEdges,
+    edgeTraversals: Array.from(edgeCountMap.values()),
+  };
+}
+
+function calculateStatusShare(timelineData: VehicleTimelineDatum[], replayTime: number): StatusShare {
+  const clampedReplayTime = Math.max(0, replayTime);
+  const durations = { idle: 0, picking_up: 0, carrying: 0 };
+
+  for (const segment of timelineData) {
+    const start = Math.max(0, segment.startTime);
+    const end = Math.min(clampedReplayTime, segment.endTime);
+    if (end <= start) continue;
+
+    if (segment.status === 'picking_up') durations.picking_up += end - start;
+    else if (segment.status === 'carrying') durations.carrying += end - start;
+    else durations.idle += end - start;
+  }
+
+  const total = durations.idle + durations.picking_up + durations.carrying;
+  if (total <= 0) {
+    const activeSegment = timelineData.find(
+      segment => segment.startTime <= clampedReplayTime && segment.endTime >= clampedReplayTime,
+    );
+    return {
+      idlePct: !activeSegment || activeSegment.status === 'idle' || activeSegment.status === 'repositioning' ? 100 : 0,
+      pickupPct: activeSegment?.status === 'picking_up' ? 100 : 0,
+      carryingPct: activeSegment?.status === 'carrying' ? 100 : 0,
+    };
+  }
+
+  const idlePct = Math.round((durations.idle / total) * 100);
+  const pickupPct = Math.round((durations.picking_up / total) * 100);
+  return {
+    idlePct,
+    pickupPct,
+    carryingPct: Math.max(0, 100 - idlePct - pickupPct),
+  };
+}
+
 export function useSimulationHistory() {
   const framesRef = useRef<SimulationState[]>([]);
   const vehicleIdSetRef = useRef(new Set<number>());
@@ -111,9 +195,16 @@ export function useSimulationHistory() {
   const analysis = useMemo((): VehicleAnalysis | null => {
     if (analysisVehicleId == null || framesRef.current.length === 0) return null;
 
-    const frames = framesRef.current;
+    const frames = getOrderedFrames(framesRef.current);
+    if (frames.length === 0) return null;
+
     const firstFrame = frames[0];
     const vid = analysisVehicleId;
+    const replayFrame = frameAtOrBefore(frames, replayTime) ?? firstFrame;
+    const replayFrames = frames.filter(
+      frame => frame.metrics.currentTime <= replayFrame.metrics.currentTime,
+    );
+    const replayFramesForAnalysis = replayFrames.length > 0 ? replayFrames : [replayFrame];
     // --- Collect all passengers ever assigned to this vehicle ---
     const passengerMap = new Map<number, Passenger>();
     for (const frame of frames) {
@@ -128,35 +219,8 @@ export function useSimulationHistory() {
     );
 
     // --- Route edges & traversal counts (directional) ---
-    const edgeSet = new Set<string>();
-    const routeEdges: [number, number][] = [];
-    const edgeCountMap = new Map<string, EdgeTraversal>();
-    let lastPathSig = '';
-    for (const frame of frames) {
-      const v = frame.vehicles.find(veh => veh.id === vid);
-      if (!v || v.path.length < 2) continue;
-      const pathSig = `${frame.metrics.currentTime}-${v.path.join('|')}`;
-      // Count traversals only when path signature (per time) changes,
-      // so repeated frames of the same path don't inflate counts.
-      if (pathSig === lastPathSig) continue;
-      lastPathSig = pathSig;
-      for (let i = 0; i < v.path.length - 1; i++) {
-        const a = v.path[i];
-        const b = v.path[i + 1];
-        const key = `${a}-${b}`;
-        if (!edgeSet.has(key)) {
-          edgeSet.add(key);
-          routeEdges.push([a, b]);
-        }
-        const existing = edgeCountMap.get(key);
-        if (existing) {
-          existing.count += 1;
-        } else {
-          edgeCountMap.set(key, { from: a, to: b, count: 1 });
-        }
-      }
-    }
-    const edgeTraversals: EdgeTraversal[] = Array.from(edgeCountMap.values());
+    const { routeEdges } = collectEdgeAnalysis(frames, vid);
+    const { edgeTraversals } = collectEdgeAnalysis(replayFramesForAnalysis, vid);
 
     // --- Node activity (pickup / dropoff counts for this vehicle) ---
     const nodeActivityMap = new Map<number, NodeActivity>();
@@ -208,46 +272,48 @@ export function useSimulationHistory() {
       }
     }
 
-    // --- Efficiency data (cumulative status breakdown per frame) ---
-    const statusCounts = { idle: 0, picking_up: 0, carrying: 0 };
-    const efficiencyData: EfficiencyDatum[] = [];
+    // --- Timeline and status share data ---
     const timelineData: VehicleTimelineDatum[] = [];
     let currentTimelineSegment: VehicleTimelineDatum | null = null;
     let prevTime = -1;
+
     for (const frame of frames) {
       const v = frame.vehicles.find(veh => veh.id === vid);
       if (!v) continue;
+
       const t = frame.metrics.currentTime;
       if (t === prevTime) continue;
       prevTime = t;
 
-      if (v.status === 'idle') statusCounts.idle++;
-      else if (v.status === 'picking_up') statusCounts.picking_up++;
-      else if (v.status === 'carrying') statusCounts.carrying++;
-      else statusCounts.idle++;
-
-      if (!currentTimelineSegment || currentTimelineSegment.status !== v.status) {
-        if (currentTimelineSegment) currentTimelineSegment.endTime = t;
+      if (!currentTimelineSegment) {
+        currentTimelineSegment = { startTime: 0, endTime: Math.max(0, t), status: v.status };
+        timelineData.push(currentTimelineSegment);
+      } else if (currentTimelineSegment.status !== v.status) {
+        currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, t);
         currentTimelineSegment = { startTime: t, endTime: t, status: v.status };
         timelineData.push(currentTimelineSegment);
       } else {
-        currentTimelineSegment.endTime = t;
+        currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, t);
       }
+    }
 
-      const total = statusCounts.idle + statusCounts.picking_up + statusCounts.carrying;
-      if (total > 0) {
-        const idlePct = Math.round((statusCounts.idle / total) * 100);
-        const pickupPct = Math.round((statusCounts.picking_up / total) * 100);
-        const carryingPct = 100 - idlePct - pickupPct;
-        efficiencyData.push({ time: t, idlePct, pickupPct, carryingPct });
-      }
-    }
     if (currentTimelineSegment) {
-      currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, currentTimelineSegment.startTime + 1);
+      currentTimelineSegment.endTime = Math.max(
+        currentTimelineSegment.endTime,
+        currentTimelineSegment.startTime + 1,
+      );
     }
+
+    const efficiencyData: EfficiencyDatum[] = frames
+      .map(frame => frame.metrics.currentTime)
+      .filter((time, index, times) => index === 0 || time !== times[index - 1])
+      .map(time => ({
+        time,
+        ...calculateStatusShare(timelineData, time),
+      }));
+    const replayStatusShare = calculateStatusShare(timelineData, replayTime);
 
     // --- Snapshot at replay time (or earliest frame when replayTime is before first frame) ---
-    const replayFrame = frameAtOrBefore(frames, replayTime) ?? firstFrame;
     const metrics: SimulationMetrics = replayFrame.metrics;
 
     // --- Vehicles & passengers snapshot at replay time ---
@@ -275,11 +341,6 @@ export function useSimulationHistory() {
     const avgDetourFactor = detours.length
       ? detours.reduce((a, b) => a + b, 0) / detours.length
       : 0;
-    let replayEff = efficiencyData[0];
-    for (const e of efficiencyData) {
-      if (e.time <= replayTime) replayEff = e;
-      else break;
-    }
     const replayVehicle = currentVehicle ?? replayVehicles.find(v => v.id === vid) ?? null;
     const totalDistance = replayVehicle?.totalDistance ?? 0;
     const totalTrips = replayVehicle?.totalTrips ?? 0;
@@ -292,9 +353,9 @@ export function useSimulationHistory() {
       avgWaitTime: Math.round(avgWaitTime * 10) / 10,
       avgDetourFactor: Math.round(avgDetourFactor * 100) / 100,
       maxWaitTime: Math.round(maxWaitTime * 10) / 10,
-      idlePct: replayEff?.idlePct ?? 0,
-      pickupPct: replayEff?.pickupPct ?? 0,
-      carryingPct: replayEff?.carryingPct ?? 0,
+      idlePct: replayStatusShare.idlePct,
+      pickupPct: replayStatusShare.pickupPct,
+      carryingPct: replayStatusShare.carryingPct,
       serviceRate: totalAssigned > 0 ? Math.round((servedPassengers / totalAssigned) * 1000) / 10 : 0,
       distancePerTrip: totalTrips > 0 ? Math.round((totalDistance / totalTrips) * 10) / 10 : 0,
     };

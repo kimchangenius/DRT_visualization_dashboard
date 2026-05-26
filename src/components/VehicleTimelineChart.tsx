@@ -26,7 +26,7 @@ export default function VehicleTimelineChart({ data, replayTime, statusShare }: 
     }))
     .filter(d => d.endTime >= d.startTime);
 
-  const minTime = visibleSegments.length > 0 ? visibleSegments[0].startTime : 0;
+  const minTime = 0;
   const maxTime = Math.max(
     replayTime,
     ...visibleSegments.map(d => d.endTime),
