@@ -637,9 +637,6 @@ export default function NetworkMap({
                 <span className="legend-triangle-up" style={{ borderBottomColor: DROPOFF_COLOR }} /> D: Dropoff
               </div>
               <div className="legend-item">
-                <span className="legend-triangle-up" style={{ borderBottomColor: '#ef4444' }} /> D: Cancelled
-              </div>
-              <div className="legend-item">
                 <span className="legend-dash" /> OD pair
               </div>
             </>
