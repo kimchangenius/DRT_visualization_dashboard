@@ -4,7 +4,7 @@ import NetworkMap from './NetworkMap';
 import TemporalComparisonCharts from './TemporalComparisonCharts';
 import VehicleTemporalComparisonCharts from './VehicleTemporalComparisonCharts';
 import { PLAYBACK_INTERVAL_MS, RESULT_A_COLOR, RESULT_B_COLOR } from '../config';
-import type { SimulationMetrics, SimulationState, VehiclePatternSelection } from '../types/simulation';
+import type { SimulationMetrics, SimulationState, VehiclePatternSelection, VehicleStatus } from '../types/simulation';
 import { formatSimTime } from '../utils/time';
 import { frameAtOrBefore, framesBetween } from '../utils/replay';
 
@@ -33,6 +33,12 @@ interface ComparisonMetricRow {
   value: (metrics: SimulationMetrics) => string | number;
   unit?: string;
 }
+
+const VEHICLE_STATUS_LABELS: Array<{ status: VehicleStatus; label: string; color: string }> = [
+  { status: 'idle', label: 'Idle', color: 'transparent' },
+  { status: 'picking_up', label: 'Picking up', color: '#f59e0b' },
+  { status: 'carrying', label: 'Carrying', color: '#10b981' },
+];
 
 const COMPARISON_METRIC_ROWS: ComparisonMetricRow[] = [
   {
@@ -223,6 +229,27 @@ function metricDisplayValue(
   return `${row.value(frame.metrics)}${row.unit ?? ''}`;
 }
 
+function VehicleStatusLegendPanel() {
+  return (
+    <div className="panel compare-vehicle-status-panel">
+      <h3 className="panel-title">Timeline Status</h3>
+      <div className="vehicle-pattern-legend" aria-label="Vehicle timeline status legend">
+        {VEHICLE_STATUS_LABELS.map(({ status, label, color }) => (
+          <span key={status}>
+            <i
+              style={{
+                background: color,
+                borderColor: status === 'idle' ? 'rgba(148, 163, 184, 0.42)' : color,
+              }}
+            />
+            {label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ComparisonMetricsPanel({
   leftFrame,
   rightFrame,
@@ -410,6 +437,8 @@ export default function ResultCompare() {
           leftFrame={leftFrame}
           rightFrame={rightFrame}
         />
+
+        {patternMode === 'vehicle' ? <VehicleStatusLegendPanel /> : null}
       </aside>
 
       <main className="compare-main">

@@ -1216,6 +1216,25 @@
   margin-bottom: 0;
 }
 
+.compare-vehicle-status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compare-vehicle-status-panel .panel-title {
+  margin-bottom: 0;
+}
+
+.compare-vehicle-status-panel .vehicle-pattern-legend {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  font-size: 0.66rem;
+}
+
 .compare-metrics-table {
   display: grid;
   grid-template-columns: minmax(104px, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
@@ -1572,7 +1591,9 @@
 }
 
 .vehicle-pattern-timeline-row {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -1631,6 +1652,16 @@
   padding-left: 8px;
   color: var(--text-muted);
   font-size: 0.62rem;
+}
+
+.vehicle-pattern-axis {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .chart-empty {

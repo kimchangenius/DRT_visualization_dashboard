@@ -228,6 +228,10 @@ function StatusTimelineRow({
           })
         )}
       </div>
+      <div className="vehicle-pattern-axis">
+        <span>t={Math.round(domainStart)}</span>
+        <span>t={Math.round(domainEnd)}</span>
+      </div>
     </div>
   );
 }
@@ -422,21 +426,6 @@ export default function VehicleTemporalComparisonCharts({
 
   return (
     <section className="vehicle-pattern-section">
-      <div className="vehicle-pattern-legend">
-        {(Object.entries(STATUS_META) as Array<[VehicleStatus, { label: string; color: string }]>).filter(
-          ([status]) => status !== 'repositioning',
-        ).map(([status, meta]) => (
-          <span key={status}>
-            <i
-              style={{
-                background: meta.color,
-                borderColor: status === 'idle' ? 'rgba(148, 163, 184, 0.34)' : meta.color,
-              }}
-            />
-            {meta.label}
-          </span>
-        ))}
-      </div>
       <div className="vehicle-pattern-grid">
         <ResultVehicleCard
           side="left"
