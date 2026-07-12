@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import NetworkMap from './NetworkMap';
-import VehicleOperationMap from './VehicleOperationMap';
+import VehicleOperationMap, { type OperationHeatStatus } from './VehicleOperationMap';
 import RequestHeatmap from './RequestHeatmap';
 import TemporalComparisonCharts from './TemporalComparisonCharts';
 import VehicleTemporalComparisonCharts from './VehicleTemporalComparisonCharts';
@@ -259,6 +259,9 @@ function ResultRequestHeatmapPanel({
   frame,
   replayTime,
   selectedSegment,
+  comparisonFrame,
+  comparisonReplayTime,
+  comparisonSelectedSegment,
   isExpanded,
   onToggleExpanded,
 }: {
@@ -267,6 +270,9 @@ function ResultRequestHeatmapPanel({
   frame: SimulationState | null;
   replayTime: number;
   selectedSegment: VehiclePatternSelection | null;
+  comparisonFrame: SimulationState | null;
+  comparisonReplayTime: number;
+  comparisonSelectedSegment: VehiclePatternSelection | null;
   isExpanded: boolean;
   onToggleExpanded: () => void;
 }) {
@@ -308,6 +314,9 @@ function ResultRequestHeatmapPanel({
                 vehicleId={focusVehicleId}
                 passengers={frame.passengers}
                 replayTime={replayTime}
+                comparisonPassengers={comparisonFrame?.passengers}
+                comparisonReplayTime={comparisonFrame ? comparisonReplayTime : undefined}
+                comparisonVehicleId={comparisonSelectedSegment?.vehicleId ?? null}
               />
             )}
           </div>
@@ -323,6 +332,11 @@ function ResultVehicleOperationPanel({
   frame,
   replayTime,
   selectedSegment,
+  comparisonReplay,
+  comparisonReplayTime,
+  comparisonSelectedSegment,
+  statusVisibility,
+  onStatusVisibilityChange,
   isExpanded,
   onToggleExpanded,
 }: {
@@ -331,6 +345,11 @@ function ResultVehicleOperationPanel({
   frame: SimulationState | null;
   replayTime: number;
   selectedSegment: VehiclePatternSelection | null;
+  comparisonReplay: LoadedReplay | null;
+  comparisonReplayTime: number;
+  comparisonSelectedSegment: VehiclePatternSelection | null;
+  statusVisibility: Record<OperationHeatStatus, boolean>;
+  onStatusVisibilityChange: (visibility: Record<OperationHeatStatus, boolean>) => void;
   isExpanded: boolean;
   onToggleExpanded: () => void;
 }) {
@@ -372,6 +391,11 @@ function ResultVehicleOperationPanel({
                 focusVehicleId={focusVehicleId}
                 frames={replay.frames}
                 currentTime={replayTime}
+                comparisonFrames={comparisonReplay?.frames}
+                comparisonCurrentTime={comparisonReplay ? comparisonReplayTime : undefined}
+                comparisonFocusVehicleId={comparisonSelectedSegment?.vehicleId ?? null}
+                statusVisibility={statusVisibility}
+                onStatusVisibilityChange={onStatusVisibilityChange}
               />
             )}
           </div>
@@ -469,6 +493,10 @@ export default function ResultCompare() {
   const [expandedOperationMaps, setExpandedOperationMaps] = useState<Record<ReplaySide, boolean>>({ left: false, right: false });
   const [expandedHeatmaps, setExpandedHeatmaps] = useState<Record<ReplaySide, boolean>>({ left: false, right: false });
   const [patternMode, setPatternMode] = useState<'system' | 'vehicle'>('vehicle');
+  const [operationStatusVisibility, setOperationStatusVisibility] = useState<Record<OperationHeatStatus, boolean>>({
+    picking_up: true,
+    carrying: true,
+  });
   const [selectedVehicleSegments, setSelectedVehicleSegments] = useState<Record<ReplaySide, VehiclePatternSelection | null>>({
     left: null,
     right: null,
@@ -675,6 +703,11 @@ export default function ResultCompare() {
             frame={leftFrame}
             replayTime={replayTimes.left}
             selectedSegment={selectedVehicleSegments.left}
+            comparisonReplay={rightReplay}
+            comparisonReplayTime={replayTimes.right}
+            comparisonSelectedSegment={selectedVehicleSegments.right}
+            statusVisibility={operationStatusVisibility}
+            onStatusVisibilityChange={setOperationStatusVisibility}
             isExpanded={expandedOperationMaps.left}
             onToggleExpanded={() => toggleOperationMap('left')}
           />
@@ -684,6 +717,11 @@ export default function ResultCompare() {
             frame={rightFrame}
             replayTime={replayTimes.right}
             selectedSegment={selectedVehicleSegments.right}
+            comparisonReplay={leftReplay}
+            comparisonReplayTime={replayTimes.left}
+            comparisonSelectedSegment={selectedVehicleSegments.left}
+            statusVisibility={operationStatusVisibility}
+            onStatusVisibilityChange={setOperationStatusVisibility}
             isExpanded={expandedOperationMaps.right}
             onToggleExpanded={() => toggleOperationMap('right')}
           />
@@ -695,6 +733,9 @@ export default function ResultCompare() {
             frame={leftFrame}
             replayTime={replayTimes.left}
             selectedSegment={selectedVehicleSegments.left}
+            comparisonFrame={rightFrame}
+            comparisonReplayTime={replayTimes.right}
+            comparisonSelectedSegment={selectedVehicleSegments.right}
             isExpanded={expandedHeatmaps.left}
             onToggleExpanded={() => toggleHeatmap('left')}
           />
@@ -704,6 +745,9 @@ export default function ResultCompare() {
             frame={rightFrame}
             replayTime={replayTimes.right}
             selectedSegment={selectedVehicleSegments.right}
+            comparisonFrame={leftFrame}
+            comparisonReplayTime={replayTimes.left}
+            comparisonSelectedSegment={selectedVehicleSegments.left}
             isExpanded={expandedHeatmaps.right}
             onToggleExpanded={() => toggleHeatmap('right')}
           />

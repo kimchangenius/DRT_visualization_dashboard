@@ -1098,13 +1098,13 @@
 }
 
 .compare-operation-grid.has-expanded {
-  flex: 0 0 min(52%, 560px);
-  min-height: 440px;
+  flex: 0 0 min(46%, 500px);
+  min-height: 400px;
 }
 
 .compare-heatmap-grid.has-expanded {
-  flex: 0 0 min(52%, 560px);
-  min-height: 440px;
+  flex: 0 0 min(46%, 500px);
+  min-height: 400px;
 }
 
 .compare-map-slot {
@@ -1132,11 +1132,11 @@
 }
 
 .compare-operation-grid .compare-map-slot.is-expanded .compare-map-accordion {
-  min-height: 440px;
+  min-height: 400px;
 }
 
 .compare-heatmap-grid .compare-map-slot.is-expanded .compare-map-accordion {
-  min-height: 440px;
+  min-height: 400px;
 }
 
 .compare-map-accordion-head {
@@ -1229,11 +1229,11 @@
 }
 
 .compare-operation-accordion-body .vehicle-operation-svg-wrap {
-  min-height: 350px;
+  min-height: 310px;
 }
 
 .compare-heatmap-accordion-body .request-heatmap-svg-wrap {
-  min-height: 350px;
+  min-height: 310px;
 }
 
 .compare-map-accordion-body > .compare-empty-text {
@@ -2488,7 +2488,7 @@
 
 .vehicle-operation-node text {
   fill: #e2e8f0;
-  font-size: 4.3px;
+  font-size: 4.8px;
   font-weight: 800;
   pointer-events: none;
 }
@@ -2501,7 +2501,7 @@
 
 .vehicle-operation-hotspot-label {
   fill: #f8fafc;
-  font-size: 5px;
+  font-size: 5.6px;
   font-weight: 900;
   pointer-events: none;
 }
@@ -2532,7 +2532,7 @@
 
 .vehicle-operation-summary {
   color: #e2e8f0;
-  font-size: 0.66rem;
+  font-size: 0.7rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -2566,7 +2566,7 @@
   justify-content: flex-end;
   gap: 5px 10px;
   color: var(--text-muted, #94a3b8);
-  font-size: 0.58rem;
+  font-size: 0.62rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -2676,14 +2676,14 @@
 
 .request-heatmap-count-label {
   fill: #f8fafc;
-  font-size: 5.2px;
+  font-size: 5.8px;
   font-weight: 800;
   pointer-events: none;
 }
 
 .request-heatmap-node text {
   fill: #e2e8f0;
-  font-size: 4.3px;
+  font-size: 4.8px;
   font-weight: 800;
   pointer-events: none;
 }
@@ -2712,11 +2712,20 @@
   min-width: 0;
 }
 
-.request-heatmap-summary {
-  color: #e2e8f0;
-  font-size: 0.66rem;
-  font-weight: 800;
+.request-heatmap-status-mix {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px 10px;
+  color: var(--text-muted, #94a3b8);
+  font-size: 0.62rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+.request-heatmap-status-mix > span {
+  line-height: 1;
   white-space: nowrap;
 }
 
