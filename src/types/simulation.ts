@@ -23,6 +23,7 @@ export interface Vehicle {
   pathProgress: number;
   status: VehicleStatus;
   passengerId: number | null;
+  numPassengers?: number;
   totalTrips: number;
   totalDistance: number;
 }
@@ -34,6 +35,7 @@ export interface Passenger {
   originNodeId: number;
   destinationNodeId: number;
   directTravelTime?: number | null;
+  numPassengers?: number;
   requestTime: number;
   pickupTime: number | null;
   deliveryTime: number | null;
@@ -156,6 +158,14 @@ export interface VehicleTimelineDatum {
   startTime: number;
   endTime: number;
   status: VehicleStatus;
+  hasPassengerEvent?: boolean;
+}
+
+export interface VehiclePassengerLoadDatum {
+  time: number;
+  onboardPassengers: number;
+  onboardPassengerIds?: number[];
+  onboardPassengerLabels?: string[];
 }
 
 export interface VehiclePatternSelection {
@@ -209,4 +219,5 @@ export interface VehicleAnalysis {
   detourFactorData: DetourFactorDatum[];
   efficiencyData: EfficiencyDatum[];
   timelineData: VehicleTimelineDatum[];
+  passengerLoadData: VehiclePassengerLoadDatum[];
 }

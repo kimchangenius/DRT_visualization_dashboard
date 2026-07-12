@@ -14,6 +14,8 @@ import type {
   DetourFactorDatum,
   EfficiencyDatum,
   VehicleTimelineDatum,
+  VehiclePassengerLoadDatum,
+  VehicleStatus,
 } from '../types/simulation';
 import { shortestTravelTime } from '../data/siouxFallsNetwork';
 import { PLAYBACK_INTERVAL_MS } from '../config';
@@ -101,6 +103,85 @@ function calculateStatusShare(timelineData: VehicleTimelineDatum[], replayTime: 
     pickupPct,
     carryingPct: Math.max(0, 100 - idlePct - pickupPct),
   };
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function passengerUnitCount(passenger: Passenger): number {
+  return isFiniteNumber(passenger.numPassengers) && passenger.numPassengers > 0
+    ? passenger.numPassengers
+    : 1;
+}
+
+function onboardPassengersForVehicle(frame: SimulationState, vehicleId: number): Passenger[] {
+  const time = frame.metrics.currentTime;
+  return frame.passengers.filter(passenger => {
+    if (passenger.assignedVehicleId !== vehicleId) return false;
+    if (passenger.status === 'cancelled') return false;
+    if (passenger.pickupTime == null || passenger.pickupTime > time) return false;
+    if (passenger.deliveryTime != null && passenger.deliveryTime <= time) return false;
+    return true;
+  });
+}
+
+function vehicleOnboardPassengerCount(
+  vehicle: Vehicle | undefined,
+  onboardPassengers: Passenger[],
+): number {
+  if (isFiniteNumber(vehicle?.numPassengers)) {
+    return Math.max(0, vehicle.numPassengers);
+  }
+
+  return onboardPassengers.reduce((count, passenger) => count + passengerUnitCount(passenger), 0);
+}
+
+function onboardPassengerLabels(passengers: Passenger[]): string[] {
+  return passengers.map(passenger => {
+    const count = passengerUnitCount(passenger);
+    return count > 1 ? 'P' + passenger.id + ' x' + count : 'P' + passenger.id;
+  });
+}
+
+function onboardPassengerSignature(passengers: Passenger[]): string {
+  return passengers
+    .map(passenger => passenger.id + ':' + passengerUnitCount(passenger))
+    .sort()
+    .join('|');
+}
+
+function inferVehicleTimelineStatus(
+  frame: SimulationState,
+  vehicleId: number,
+  fallbackStatus: VehicleStatus,
+): VehicleStatus {
+  if (fallbackStatus !== 'idle' && fallbackStatus !== 'repositioning') {
+    return fallbackStatus;
+  }
+
+  const time = frame.metrics.currentTime;
+  const assignedPassengers = frame.passengers.filter(
+    passenger => passenger.assignedVehicleId === vehicleId,
+  );
+  const hasOnboardPassenger = assignedPassengers.some(
+    passenger =>
+      passenger.status !== 'cancelled' &&
+      passenger.pickupTime != null &&
+      passenger.pickupTime <= time &&
+      (passenger.deliveryTime == null || passenger.deliveryTime > time),
+  );
+  if (hasOnboardPassenger) return 'carrying';
+
+  const hasPickupTarget = assignedPassengers.some(
+    passenger =>
+      passenger.status === 'waiting' &&
+      passenger.requestTime <= time &&
+      (passenger.pickupTime == null || passenger.pickupTime > time),
+  );
+  if (hasPickupTarget) return 'picking_up';
+
+  return fallbackStatus;
 }
 
 export function useSimulationHistory() {
@@ -275,6 +356,7 @@ export function useSimulationHistory() {
     // --- Timeline and status share data ---
     const timelineData: VehicleTimelineDatum[] = [];
     let currentTimelineSegment: VehicleTimelineDatum | null = null;
+    let currentPassengerSignature = '';
     let prevTime = -1;
 
     for (const frame of frames) {
@@ -284,16 +366,28 @@ export function useSimulationHistory() {
       const t = frame.metrics.currentTime;
       if (t === prevTime) continue;
       prevTime = t;
+      const status = inferVehicleTimelineStatus(frame, vid, v.status);
+      const passengerSignature = onboardPassengerSignature(onboardPassengersForVehicle(frame, vid));
 
       if (!currentTimelineSegment) {
-        currentTimelineSegment = { startTime: 0, endTime: Math.max(0, t), status: v.status };
-        timelineData.push(currentTimelineSegment);
-      } else if (currentTimelineSegment.status !== v.status) {
-        currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, t);
-        currentTimelineSegment = { startTime: t, endTime: t, status: v.status };
+        currentPassengerSignature = passengerSignature;
+        currentTimelineSegment = { startTime: 0, endTime: Math.max(0, t), status };
         timelineData.push(currentTimelineSegment);
       } else {
-        currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, t);
+        const hasPassengerEvent = currentPassengerSignature !== passengerSignature;
+        if (currentTimelineSegment.status !== status || hasPassengerEvent) {
+          currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, t);
+          currentTimelineSegment = {
+            startTime: t,
+            endTime: t,
+            status,
+            hasPassengerEvent,
+          };
+          currentPassengerSignature = passengerSignature;
+          timelineData.push(currentTimelineSegment);
+        } else {
+          currentTimelineSegment.endTime = Math.max(currentTimelineSegment.endTime, t);
+        }
       }
     }
 
@@ -302,6 +396,23 @@ export function useSimulationHistory() {
         currentTimelineSegment.endTime,
         currentTimelineSegment.startTime + 1,
       );
+    }
+
+    const passengerLoadData: VehiclePassengerLoadDatum[] = [];
+    let prevLoadTime = -1;
+    for (const frame of frames) {
+      const time = frame.metrics.currentTime;
+      if (time === prevLoadTime) continue;
+      prevLoadTime = time;
+      const vehicle = frame.vehicles.find(veh => veh.id === vid);
+      if (!vehicle) continue;
+      const onboardPassengers = onboardPassengersForVehicle(frame, vid);
+      passengerLoadData.push({
+        time,
+        onboardPassengers: vehicleOnboardPassengerCount(vehicle, onboardPassengers),
+        onboardPassengerIds: onboardPassengers.map(passenger => passenger.id),
+        onboardPassengerLabels: onboardPassengerLabels(onboardPassengers),
+      });
     }
 
     const efficiencyData: EfficiencyDatum[] = frames
@@ -375,6 +486,7 @@ export function useSimulationHistory() {
       detourFactorData,
       efficiencyData,
       timelineData,
+      passengerLoadData,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisVehicleId, frameCount, replayTime]);

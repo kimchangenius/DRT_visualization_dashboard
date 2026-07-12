@@ -30,7 +30,7 @@ interface ReplayTemporalSource {
 interface TemporalComparisonChartsProps {
   resultA: ReplayTemporalSource | null;
   resultB: ReplayTemporalSource | null;
-  currentTime: number;
+  currentTimes: Record<'left' | 'right', number>;
 }
 
 interface TemporalComparisonPoint {
@@ -210,22 +210,31 @@ function renderCommonTooltip() {
   );
 }
 
-function renderTimeCursor(currentTime: number) {
+function renderTimeCursors(currentTimes: { left: number; right: number }) {
   return (
-    <ReferenceLine
-      x={currentTime}
-      yAxisId="left"
-      stroke="#a78bfa"
-      strokeDasharray="4 2"
-      strokeWidth={1.5}
-    />
+    <>
+      <ReferenceLine
+        x={currentTimes.left}
+        yAxisId="left"
+        stroke={RESULT_A_COLOR}
+        strokeDasharray="4 2"
+        strokeWidth={1.5}
+      />
+      <ReferenceLine
+        x={currentTimes.right}
+        yAxisId="left"
+        stroke={RESULT_B_COLOR}
+        strokeDasharray="4 2"
+        strokeWidth={1.5}
+      />
+    </>
   );
 }
 
 function MetricTemporalChart({
   metric,
   chartData,
-  currentTime,
+  currentTimes,
   xDomain,
   isZoomed,
   isPanning,
@@ -240,7 +249,7 @@ function MetricTemporalChart({
 }: {
   metric: TemporalMetricConfig;
   chartData: TemporalComparisonPoint[];
-  currentTime: number;
+  currentTimes: { left: number; right: number };
   xDomain: ZoomDomain;
   isZoomed: boolean;
   isPanning: boolean;
@@ -338,7 +347,7 @@ function MetricTemporalChart({
               domain={metric.domain}
             />
             {renderCommonTooltip()}
-            {renderTimeCursor(currentTime)}
+            {renderTimeCursors(currentTimes)}
             {renderComparisonLine({
               dataKey: metric.aKey,
               name: 'Result A',
@@ -359,13 +368,10 @@ function MetricTemporalChart({
 export default function TemporalComparisonCharts({
   resultA,
   resultB,
-  currentTime,
+  currentTimes,
 }: TemporalComparisonChartsProps) {
   const data = buildTemporalComparisonData(resultA, resultB);
-  const visibleData = data.filter(point => point.time <= currentTime);
-  const chartData = visibleData.length > 0 && data.length > 1
-    ? visibleData
-    : data.slice(0, Math.min(1, data.length));
+  const chartData = data;
   const hasData = data.length > 0;
   const fullDomain = useMemo(() => domainFromValues(chartData.map(point => point.time)), [chartData]);
   const [zoomDomains, setZoomDomains] = useState<ZoomDomains>({});
@@ -448,7 +454,7 @@ export default function TemporalComparisonCharts({
             key={metric.title}
             metric={metric}
             chartData={chartData}
-            currentTime={currentTime}
+            currentTimes={currentTimes}
             xDomain={domainForMetric(metric.title)}
             isZoomed={zoomDomains[metric.title] != null}
             isPanning={panningMetric === metric.title}

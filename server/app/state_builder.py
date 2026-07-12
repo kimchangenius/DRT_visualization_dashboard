@@ -63,6 +63,7 @@ def extract_vehicle(v, environment):
         'pathProgress': round(path_progress, 2),
         'status': status_str,
         'passengerId': v.target_request.id if v.target_request else None,
+        'numPassengers': int(getattr(v, 'num_passengers', 0)),
         'totalTrips': v.num_serve,
         'totalDistance': 0,
     }
@@ -83,6 +84,7 @@ def extract_passenger(r):
         'originNodeId': r.from_node_id,
         'destinationNodeId': r.to_node_id,
         'directTravelTime': r.travel_time,
+        'numPassengers': int(getattr(r, 'num_passengers', 1)),
         'requestTime': r.request_time,
         'pickupTime': r.pickup_at,
         'deliveryTime': r.dropoff_at,

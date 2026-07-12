@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import NetworkMap from './NetworkMap';
+import VehicleOperationMap from './VehicleOperationMap';
+import RequestHeatmap from './RequestHeatmap';
 import TemporalComparisonCharts from './TemporalComparisonCharts';
 import VehicleTemporalComparisonCharts from './VehicleTemporalComparisonCharts';
-import { PLAYBACK_INTERVAL_MS, RESULT_A_COLOR, RESULT_B_COLOR } from '../config';
-import type { SimulationMetrics, SimulationState, VehiclePatternSelection, VehicleStatus } from '../types/simulation';
+import { RESULT_A_COLOR, RESULT_B_COLOR } from '../config';
+import type { SimulationMetrics, SimulationState, VehiclePatternSelection } from '../types/simulation';
 import { formatSimTime } from '../utils/time';
 import { frameAtOrBefore, framesBetween } from '../utils/replay';
 
@@ -17,6 +18,8 @@ interface LoadedReplay {
 }
 
 type ReplaySide = 'left' | 'right';
+
+type ReplayTimes = Record<ReplaySide, number>;
 
 const SIDE_LABEL: Record<ReplaySide, string> = {
   left: 'Result A',
@@ -33,12 +36,6 @@ interface ComparisonMetricRow {
   value: (metrics: SimulationMetrics) => string | number;
   unit?: string;
 }
-
-const VEHICLE_STATUS_LABELS: Array<{ status: VehicleStatus; label: string; color: string }> = [
-  { status: 'idle', label: 'Idle', color: 'transparent' },
-  { status: 'picking_up', label: 'Picking up', color: '#f59e0b' },
-  { status: 'carrying', label: 'Carrying', color: '#10b981' },
-];
 
 const COMPARISON_METRIC_ROWS: ComparisonMetricRow[] = [
   {
@@ -121,6 +118,22 @@ function parseReplayPayload(payload: unknown, fileName: string): LoadedReplay {
   };
 }
 
+function clampReplayTime(replay: LoadedReplay | null, time: number): number {
+  if (!replay) return 0;
+  return Math.min(Math.max(time, replay.timeMin), replay.timeMax);
+}
+
+function syncedReplayTimes(
+  leftReplay: LoadedReplay | null,
+  rightReplay: LoadedReplay | null,
+  time: number,
+): ReplayTimes {
+  return {
+    left: clampReplayTime(leftReplay, time),
+    right: clampReplayTime(rightReplay, time),
+  };
+}
+
 function framesForSegment(
   replay: LoadedReplay | null,
   selection: VehiclePatternSelection | null,
@@ -184,39 +197,186 @@ function ResultMapPanel({
   replay,
   frame,
   selectedSegment,
+  isExpanded,
+  onToggleExpanded,
   onClearSelectedSegment,
 }: {
   side: ReplaySide;
   replay: LoadedReplay | null;
   frame: SimulationState | null;
   selectedSegment: VehiclePatternSelection | null;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
   onClearSelectedSegment: () => void;
 }) {
   const activeSelectedSegment = selectedSegment?.resultSide === side ? selectedSegment : null;
   const selectedSegmentFrames = framesForSegment(replay, activeSelectedSegment);
   const displayFrame = selectedSegmentFrames[0] ?? frame;
-
-  if (!replay || !displayFrame) {
-    return (
-      <section className="compare-map-slot">
-        <div className="panel compare-empty-panel">
-          <h3 className="panel-title">{SIDE_LABEL[side]}</h3>
-          <div className="compare-empty-text">Load a replay JSON file.</div>
-        </div>
-      </section>
-    );
-  }
+  const bodyId = `compare-network-map-${side}`;
 
   return (
-    <section className="compare-map-slot">
-      <NetworkMap
-        title={SIDE_LABEL[side]}
-        vehicles={displayFrame.vehicles}
-        passengers={displayFrame.passengers}
-        selectedSegment={activeSelectedSegment}
-        selectedSegmentFrames={selectedSegmentFrames}
-        onClearSelectedSegment={onClearSelectedSegment}
-      />
+    <section className={"compare-map-slot" + (isExpanded ? " is-expanded" : " is-collapsed")}>
+      <div className="panel compare-map-accordion">
+        <button
+          type="button"
+          className="compare-map-accordion-head"
+          aria-expanded={isExpanded}
+          aria-controls={bodyId}
+          aria-label={(isExpanded ? 'Collapse ' : 'Expand ') + SIDE_LABEL[side] + ' network map'}
+          onClick={onToggleExpanded}
+        >
+          <span className="compare-map-accordion-title" style={{ color: SIDE_COLOR[side] }}>
+            {SIDE_LABEL[side]} Network Map
+          </span>
+          <span className="compare-map-accordion-icon" aria-hidden="true" />
+        </button>
+        {isExpanded ? (
+          <div id={bodyId} className="compare-map-accordion-body">
+            {!replay || !displayFrame ? (
+              <div className="compare-empty-text">Load a replay JSON file.</div>
+            ) : (
+              <NetworkMap
+                embedded
+                hideTitle
+                title={SIDE_LABEL[side]}
+                vehicles={displayFrame.vehicles}
+                passengers={displayFrame.passengers}
+                selectedSegment={activeSelectedSegment}
+                selectedSegmentFrames={selectedSegmentFrames}
+                onClearSelectedSegment={onClearSelectedSegment}
+              />
+            )}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function ResultRequestHeatmapPanel({
+  side,
+  replay,
+  frame,
+  replayTime,
+  selectedSegment,
+  isExpanded,
+  onToggleExpanded,
+}: {
+  side: ReplaySide;
+  replay: LoadedReplay | null;
+  frame: SimulationState | null;
+  replayTime: number;
+  selectedSegment: VehiclePatternSelection | null;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
+}) {
+  const activeSelectedSegment = selectedSegment?.resultSide === side ? selectedSegment : null;
+  const bodyId = `compare-request-heatmap-${side}`;
+  const focusVehicleId = activeSelectedSegment?.vehicleId ?? null;
+  const contextLabel = focusVehicleId == null
+    ? `t=${formatSimTime(replayTime)}`
+    : `V${focusVehicleId} · t=${formatSimTime(replayTime)}`;
+
+  return (
+    <section className={"compare-map-slot compare-heatmap-slot" + (isExpanded ? " is-expanded" : " is-collapsed")}>
+      <div className="panel compare-map-accordion compare-heatmap-accordion">
+        <button
+          type="button"
+          className="compare-map-accordion-head"
+          aria-expanded={isExpanded}
+          aria-controls={bodyId}
+          aria-label={(isExpanded ? 'Collapse ' : 'Expand ') + SIDE_LABEL[side] + ' request heatmap'}
+          onClick={onToggleExpanded}
+        >
+          <span className="compare-map-accordion-labels">
+            <span className="compare-map-accordion-title" style={{ color: SIDE_COLOR[side] }}>
+              {SIDE_LABEL[side]} Request Heatmap
+            </span>
+          </span>
+          <span className="compare-map-accordion-icon" aria-hidden="true" />
+        </button>
+        {isExpanded ? (
+          <div id={bodyId} className="compare-map-accordion-body compare-heatmap-accordion-body">
+            {!replay || !frame ? (
+              <div className="compare-empty-text">Load a replay JSON file.</div>
+            ) : (
+              <RequestHeatmap
+                embedded
+                hideTitle
+                title={`${SIDE_LABEL[side]} Request Heatmap`}
+                contextLabel={contextLabel}
+                vehicleId={focusVehicleId}
+                passengers={frame.passengers}
+                replayTime={replayTime}
+              />
+            )}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function ResultVehicleOperationPanel({
+  side,
+  replay,
+  frame,
+  replayTime,
+  selectedSegment,
+  isExpanded,
+  onToggleExpanded,
+}: {
+  side: ReplaySide;
+  replay: LoadedReplay | null;
+  frame: SimulationState | null;
+  replayTime: number;
+  selectedSegment: VehiclePatternSelection | null;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
+}) {
+  const activeSelectedSegment = selectedSegment?.resultSide === side ? selectedSegment : null;
+  const bodyId = `compare-vehicle-operation-map-${side}`;
+  const focusVehicleId = activeSelectedSegment?.vehicleId ?? null;
+  const contextLabel = focusVehicleId == null
+    ? `t=${formatSimTime(replayTime)}`
+    : `V${focusVehicleId} · t=${formatSimTime(replayTime)}`;
+
+  return (
+    <section className={"compare-map-slot compare-operation-slot" + (isExpanded ? " is-expanded" : " is-collapsed")}>
+      <div className="panel compare-map-accordion compare-operation-accordion">
+        <button
+          type="button"
+          className="compare-map-accordion-head"
+          aria-expanded={isExpanded}
+          aria-controls={bodyId}
+          aria-label={(isExpanded ? 'Collapse ' : 'Expand ') + SIDE_LABEL[side] + ' vehicle activity heatmap'}
+          onClick={onToggleExpanded}
+        >
+          <span className="compare-map-accordion-labels">
+            <span className="compare-map-accordion-title" style={{ color: SIDE_COLOR[side] }}>
+              {SIDE_LABEL[side]} Vehicle Activity
+            </span>
+          </span>
+          <span className="compare-map-accordion-icon" aria-hidden="true" />
+        </button>
+        {isExpanded ? (
+          <div id={bodyId} className="compare-map-accordion-body compare-operation-accordion-body">
+            {!replay || !frame ? (
+              <div className="compare-empty-text">Load a replay JSON file.</div>
+            ) : (
+              <VehicleOperationMap
+                embedded
+                hideTitle
+                title={`${SIDE_LABEL[side]} Vehicle Activity Heatmap`}
+                contextLabel={contextLabel}
+                focusVehicleId={focusVehicleId}
+                frames={replay.frames}
+                currentTime={replayTime}
+              />
+            )}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -227,27 +387,6 @@ function metricDisplayValue(
 ): string {
   if (!frame) return '-';
   return `${row.value(frame.metrics)}${row.unit ?? ''}`;
-}
-
-function VehicleStatusLegendPanel() {
-  return (
-    <div className="panel compare-vehicle-status-panel">
-      <h3 className="panel-title">Timeline Status</h3>
-      <div className="vehicle-pattern-legend" aria-label="Vehicle timeline status legend">
-        {VEHICLE_STATUS_LABELS.map(({ status, label, color }) => (
-          <span key={status}>
-            <i
-              style={{
-                background: color,
-                borderColor: status === 'idle' ? 'rgba(148, 163, 184, 0.42)' : color,
-              }}
-            />
-            {label}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function ComparisonMetricsPanel({
@@ -283,35 +422,70 @@ function ComparisonMetricsPanel({
   );
 }
 
+function ResultReplaySlider({
+  side,
+  replay,
+  time,
+  onTimeChange,
+}: {
+  side: ReplaySide;
+  replay: LoadedReplay | null;
+  time: number;
+  onTimeChange: (side: ReplaySide, time: number) => void;
+}) {
+  const disabled = !replay || replay.timeMax <= replay.timeMin;
+
+  return (
+    <div className="compare-result-slider-row">
+      <div className="compare-result-slider-meta">
+        <span className="compare-result-slider-label" style={{ color: SIDE_COLOR[side] }}>
+          {SIDE_LABEL[side]}
+        </span>
+        <span className="compare-result-slider-time">
+          t = {formatSimTime(replay ? time : 0)}
+        </span>
+      </div>
+      <input
+        type="range"
+        className={"slider replay-slider compare-result-range is-" + side}
+        min={replay?.timeMin ?? 0}
+        max={replay?.timeMax ?? 0}
+        value={replay ? time : 0}
+        disabled={disabled}
+        onChange={event => onTimeChange(side, Number(event.target.value))}
+      />
+    </div>
+  );
+}
+
 export default function ResultCompare() {
   const [leftReplay, setLeftReplay] = useState<LoadedReplay | null>(null);
   const [rightReplay, setRightReplay] = useState<LoadedReplay | null>(null);
   const [leftError, setLeftError] = useState<string | null>(null);
   const [rightError, setRightError] = useState<string | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [patternMode, setPatternMode] = useState<'system' | 'vehicle'>('system');
+  const [replayTimes, setReplayTimes] = useState<ReplayTimes>({ left: 0, right: 0 });
+  const [isReplayTimeSynced, setIsReplayTimeSynced] = useState(false);
+  const [expandedNetworkMaps, setExpandedNetworkMaps] = useState<Record<ReplaySide, boolean>>({ left: false, right: false });
+  const [expandedOperationMaps, setExpandedOperationMaps] = useState<Record<ReplaySide, boolean>>({ left: false, right: false });
+  const [expandedHeatmaps, setExpandedHeatmaps] = useState<Record<ReplaySide, boolean>>({ left: false, right: false });
+  const [patternMode, setPatternMode] = useState<'system' | 'vehicle'>('vehicle');
   const [selectedVehicleSegments, setSelectedVehicleSegments] = useState<Record<ReplaySide, VehiclePatternSelection | null>>({
     left: null,
     right: null,
   });
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadedReplays = useMemo(
     () => [leftReplay, rightReplay].filter((r): r is LoadedReplay => r !== null),
     [leftReplay, rightReplay],
   );
 
-  const timeRange = useMemo(() => {
-    if (loadedReplays.length === 0) return { min: 0, max: 0 };
-    return {
-      min: Math.min(...loadedReplays.map(replay => replay.timeMin)),
-      max: Math.max(...loadedReplays.map(replay => replay.timeMax)),
-    };
-  }, [loadedReplays]);
+  const canSyncReplayTimes = loadedReplays.length > 1;
+  const hasExpandedNetworkMap = expandedNetworkMaps.left || expandedNetworkMaps.right;
+  const hasExpandedOperationMap = expandedOperationMaps.left || expandedOperationMaps.right;
+  const hasExpandedHeatmap = expandedHeatmaps.left || expandedHeatmaps.right;
 
-  const leftFrame = useMemo(() => leftReplay ? frameAtOrBefore(leftReplay.frames, currentTime) : null, [leftReplay, currentTime]);
-  const rightFrame = useMemo(() => rightReplay ? frameAtOrBefore(rightReplay.frames, currentTime) : null, [rightReplay, currentTime]);
+  const leftFrame = useMemo(() => leftReplay ? frameAtOrBefore(leftReplay.frames, replayTimes.left) : null, [leftReplay, replayTimes.left]);
+  const rightFrame = useMemo(() => rightReplay ? frameAtOrBefore(rightReplay.frames, replayTimes.right) : null, [rightReplay, replayTimes.right]);
 
   const loadFile = useCallback((side: ReplaySide, file: File) => {
     const reader = new FileReader();
@@ -325,10 +499,16 @@ export default function ResultCompare() {
         const text = typeof reader.result === 'string' ? reader.result : '';
         const parsed = parseReplayPayload(JSON.parse(text), file.name);
         setReplay(parsed);
-        setCurrentTime(prev => {
-          if (loadedReplays.length === 0) return parsed.timeMin;
-          return Math.min(Math.max(prev, parsed.timeMin), Math.max(timeRange.max, parsed.timeMax));
-        });
+        const nextLeftReplay = side === 'left' ? parsed : leftReplay;
+        const nextRightReplay = side === 'right' ? parsed : rightReplay;
+        setReplayTimes(prev => ({
+          ...(isReplayTimeSynced
+            ? syncedReplayTimes(nextLeftReplay, nextRightReplay, parsed.timeMax)
+            : {
+              left: side === 'left' ? parsed.timeMax : leftReplay?.timeMax ?? prev.left,
+              right: side === 'right' ? parsed.timeMax : rightReplay?.timeMax ?? prev.right,
+            }),
+        }));
       } catch (error) {
         setReplay(null);
         setError(error instanceof Error ? error.message : 'Failed to load replay file.');
@@ -339,50 +519,76 @@ export default function ResultCompare() {
       setError('Failed to read replay file.');
     };
     reader.readAsText(file);
-  }, [loadedReplays.length, timeRange.max]);
+  }, [isReplayTimeSynced, leftReplay, rightReplay]);
 
   useEffect(() => {
-    setCurrentTime(prev => Math.min(Math.max(prev, timeRange.min), timeRange.max));
-    if (loadedReplays.length === 0) setIsPlaying(false);
-  }, [loadedReplays.length, timeRange.min, timeRange.max]);
+    if (!canSyncReplayTimes) setIsReplayTimeSynced(false);
+  }, [canSyncReplayTimes]);
 
   useEffect(() => {
-    if (isPlaying) {
+    setReplayTimes(prev => ({
+      ...prev,
+      left: clampReplayTime(leftReplay, prev.left),
+    }));
+  }, [leftReplay]);
+
+  useEffect(() => {
+    setReplayTimes(prev => ({
+      ...prev,
+      right: clampReplayTime(rightReplay, prev.right),
+    }));
+  }, [rightReplay]);
+
+  const handleReplayTimeChange = useCallback((side: ReplaySide, time: number) => {
+    if (isReplayTimeSynced) {
+      setReplayTimes(syncedReplayTimes(leftReplay, rightReplay, time));
       setSelectedVehicleSegments({ left: null, right: null });
+      return;
     }
-  }, [isPlaying]);
 
-  useEffect(() => {
-    if (!isPlaying || loadedReplays.length === 0) return;
-    intervalRef.current = setInterval(() => {
-      setCurrentTime(prev => {
-        if (prev >= timeRange.max) {
-          setIsPlaying(false);
-          return prev;
-        }
-        return prev + 1;
-      });
-    }, PLAYBACK_INTERVAL_MS);
+    setReplayTimes(prev => ({ ...prev, [side]: time }));
+    setSelectedVehicleSegments(prev => ({ ...prev, [side]: null }));
+  }, [isReplayTimeSynced, leftReplay, rightReplay]);
 
-    return () => {
-      if (intervalRef.current !== null) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  }, [isPlaying, loadedReplays.length, timeRange.max]);
+  const handleReplaySyncToggle = useCallback((enabled: boolean) => {
+    setIsReplayTimeSynced(enabled);
+    if (!enabled) return;
 
-  const canReplay = loadedReplays.length > 0 && timeRange.max > timeRange.min;
+    const syncTime = leftReplay ? replayTimes.left : replayTimes.right;
+    setReplayTimes(syncedReplayTimes(leftReplay, rightReplay, syncTime));
+    setSelectedVehicleSegments({ left: null, right: null });
+  }, [leftReplay, replayTimes.left, replayTimes.right, rightReplay]);
 
   const handleSelectVehicleSegment = useCallback((selection: VehiclePatternSelection) => {
-    setSelectedVehicleSegments(prev => ({
-      ...prev,
-      [selection.resultSide]: selection,
-    }));
+    setSelectedVehicleSegments(prev => {
+      const current = prev[selection.resultSide];
+      const isSameSelection =
+        current?.vehicleId === selection.vehicleId &&
+        current.startTime === selection.startTime &&
+        current.endTime === selection.endTime &&
+        current.status === selection.status;
+
+      return {
+        ...prev,
+        [selection.resultSide]: isSameSelection ? null : selection,
+      };
+    });
   }, []);
 
   const clearVehicleSegment = useCallback((side: ReplaySide) => {
     setSelectedVehicleSegments(prev => ({ ...prev, [side]: null }));
+  }, []);
+
+  const toggleNetworkMap = useCallback((side: ReplaySide) => {
+    setExpandedNetworkMaps(prev => ({ ...prev, [side]: !prev[side] }));
+  }, []);
+
+  const toggleOperationMap = useCallback((side: ReplaySide) => {
+    setExpandedOperationMaps(prev => ({ ...prev, [side]: !prev[side] }));
+  }, []);
+
+  const toggleHeatmap = useCallback((side: ReplaySide) => {
+    setExpandedHeatmaps(prev => ({ ...prev, [side]: !prev[side] }));
   }, []);
 
   return (
@@ -398,29 +604,30 @@ export default function ResultCompare() {
 
         <div className="panel compare-controls-panel compare-replay-panel">
           <div className="compare-replay-head">
-            <h3 className="panel-title">Synchronized Replay</h3>
-            <div className="replay-time-label">
-              t = {formatSimTime(currentTime)}
-            </div>
+            <h3 className="panel-title">Replay Time</h3>
+            <label className={"compare-switch-toggle" + (!canSyncReplayTimes ? " is-disabled" : "")}>
+              <input
+                type="checkbox"
+                checked={isReplayTimeSynced}
+                disabled={!canSyncReplayTimes}
+                onChange={event => handleReplaySyncToggle(event.currentTarget.checked)}
+              />
+              <span className="compare-switch-track" aria-hidden="true" />
+              <span className="compare-switch-label">Sync</span>
+            </label>
           </div>
-          <div className="compare-replay-controls">
-            <button
-              type="button"
-              className="btn replay-btn"
-              onClick={() => setIsPlaying(prev => !prev)}
-              disabled={!canReplay}
-              title={isPlaying ? 'Pause replay' : 'Play replay'}
-            >
-              {isPlaying ? '||' : '▶'}
-            </button>
-            <input
-              type="range"
-              className="slider replay-slider"
-              min={timeRange.min}
-              max={timeRange.max}
-              value={currentTime}
-              disabled={!canReplay}
-              onChange={event => setCurrentTime(Number(event.target.value))}
+          <div className="compare-result-sliders">
+            <ResultReplaySlider
+              side="left"
+              replay={leftReplay}
+              time={replayTimes.left}
+              onTimeChange={handleReplayTimeChange}
+            />
+            <ResultReplaySlider
+              side="right"
+              replay={rightReplay}
+              time={replayTimes.right}
+              onTimeChange={handleReplayTimeChange}
             />
           </div>
           <button
@@ -438,16 +645,17 @@ export default function ResultCompare() {
           rightFrame={rightFrame}
         />
 
-        {patternMode === 'vehicle' ? <VehicleStatusLegendPanel /> : null}
       </aside>
 
       <main className="compare-main">
-        <div className="compare-map-grid">
+        <div className={"compare-map-grid" + (hasExpandedNetworkMap ? " has-expanded" : "")}>
           <ResultMapPanel
             side="left"
             replay={leftReplay}
             frame={leftFrame}
             selectedSegment={selectedVehicleSegments.left}
+            isExpanded={expandedNetworkMaps.left}
+            onToggleExpanded={() => toggleNetworkMap('left')}
             onClearSelectedSegment={() => clearVehicleSegment('left')}
           />
           <ResultMapPanel
@@ -455,14 +663,56 @@ export default function ResultCompare() {
             replay={rightReplay}
             frame={rightFrame}
             selectedSegment={selectedVehicleSegments.right}
+            isExpanded={expandedNetworkMaps.right}
+            onToggleExpanded={() => toggleNetworkMap('right')}
             onClearSelectedSegment={() => clearVehicleSegment('right')}
+          />
+        </div>
+        <div className={"compare-map-grid compare-operation-grid" + (hasExpandedOperationMap ? " has-expanded" : "")}>
+          <ResultVehicleOperationPanel
+            side="left"
+            replay={leftReplay}
+            frame={leftFrame}
+            replayTime={replayTimes.left}
+            selectedSegment={selectedVehicleSegments.left}
+            isExpanded={expandedOperationMaps.left}
+            onToggleExpanded={() => toggleOperationMap('left')}
+          />
+          <ResultVehicleOperationPanel
+            side="right"
+            replay={rightReplay}
+            frame={rightFrame}
+            replayTime={replayTimes.right}
+            selectedSegment={selectedVehicleSegments.right}
+            isExpanded={expandedOperationMaps.right}
+            onToggleExpanded={() => toggleOperationMap('right')}
+          />
+        </div>
+        <div className={"compare-map-grid compare-heatmap-grid" + (hasExpandedHeatmap ? " has-expanded" : "")}>
+          <ResultRequestHeatmapPanel
+            side="left"
+            replay={leftReplay}
+            frame={leftFrame}
+            replayTime={replayTimes.left}
+            selectedSegment={selectedVehicleSegments.left}
+            isExpanded={expandedHeatmaps.left}
+            onToggleExpanded={() => toggleHeatmap('left')}
+          />
+          <ResultRequestHeatmapPanel
+            side="right"
+            replay={rightReplay}
+            frame={rightFrame}
+            replayTime={replayTimes.right}
+            selectedSegment={selectedVehicleSegments.right}
+            isExpanded={expandedHeatmaps.right}
+            onToggleExpanded={() => toggleHeatmap('right')}
           />
         </div>
         {patternMode === 'vehicle' ? (
           <VehicleTemporalComparisonCharts
             resultA={leftReplay ? { frames: leftReplay.frames } : null}
             resultB={rightReplay ? { frames: rightReplay.frames } : null}
-            currentTime={currentTime}
+            currentTimes={replayTimes}
             selectedSegments={selectedVehicleSegments}
             onSelectSegment={handleSelectVehicleSegment}
           />
@@ -470,7 +720,7 @@ export default function ResultCompare() {
           <TemporalComparisonCharts
             resultA={leftReplay ? { frames: leftReplay.frames } : null}
             resultB={rightReplay ? { frames: rightReplay.frames } : null}
-            currentTime={currentTime}
+            currentTimes={replayTimes}
           />
         )}
       </main>

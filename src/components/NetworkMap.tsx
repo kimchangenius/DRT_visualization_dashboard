@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { nodes, links } from '../data/siouxFallsNetwork';
 import type {
   Vehicle,
@@ -13,6 +14,8 @@ interface NetworkMapProps {
   vehicles: Vehicle[];
   passengers: Passenger[];
   title?: string;
+  hideTitle?: boolean;
+  embedded?: boolean;
   analysisVehicleId?: number | null;
   edgeTraversals?: EdgeTraversal[];
   selectedSegment?: VehiclePatternSelection | null;
@@ -26,6 +29,35 @@ const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
 
 const nodeById = new Map(nodes.map(n => [n.id, n]));
+
+type TooltipPlacement = {
+  horizontal: 'left' | 'right';
+  vertical: 'top' | 'bottom';
+};
+
+type TooltipPosition = { x: number; y: number };
+
+type TooltipDragState = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
+};
+
+const TOOLTIP_MARGIN = 8;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function tooltipPlacementForNode(nodeId: number | null): TooltipPlacement {
+  const node = nodeId != null ? nodeById.get(nodeId) : null;
+  return {
+    horizontal: node && node.x >= MAP_WIDTH / 2 ? 'left' : 'right',
+    vertical: node && node.y > MAP_HEIGHT / 2 ? 'top' : 'bottom',
+  };
+}
 
 const adjacency = new Map<number, Set<number>>();
 for (const l of links) {
@@ -249,12 +281,13 @@ function getVehiclePosition(v: Vehicle) {
 const ROUTE_TRACE_COLOR = '#a78bfa';
 const PICKUP_COLOR = '#f59e0b';
 const DROPOFF_COLOR = '#10b981';
-const OD_LINE_COLOR = '#94a3b8';
 
 export default function NetworkMap({
   vehicles,
   passengers,
   title,
+  hideTitle = false,
+  embedded = false,
   analysisVehicleId,
   edgeTraversals,
   selectedSegment,
@@ -267,6 +300,10 @@ export default function NetworkMap({
   const focusedVehicleId = analysisVehicleId ?? selectedVehicleId;
   const hasTimelineSelection = selectedSegment != null;
   const activeSegmentFrames = selectedSegment ? (selectedSegmentFrames ?? []) : [];
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const tooltipDragRef = useRef<TooltipDragState | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<TooltipPosition | null>(null);
 
   const selectedSegmentRouteNodes = useMemo(() => {
     if (!selectedSegment || activeSegmentFrames.length === 0) return [];
@@ -288,11 +325,91 @@ export default function NetworkMap({
   const selectedVehicle = selectedSegment
     ? selectedVehicleSource.find(vehicle => vehicle.id === selectedSegment.vehicleId) ?? null
     : null;
+  const selectedCurrentNodeId = selectedVehicle?.currentNodeId ?? null;
+  const selectedCurrentNodeLabel = selectedCurrentNodeId != null ? 'N' + selectedCurrentNodeId : '-';
   const selectedNodeLabel = selectedSegmentRouteNodes.length > 0
-    ? selectedSegmentRouteNodes.join(' -> ')
+    ? selectedSegmentRouteNodes.map(nodeId => 'N' + nodeId).join(' -> ')
     : selectedVehicle
-      ? `${selectedVehicle.currentNodeId}${selectedVehicle.targetNodeId != null ? ` -> ${selectedVehicle.targetNodeId}` : ''}`
+      ? selectedCurrentNodeLabel + (selectedVehicle.targetNodeId != null ? ' -> N' + selectedVehicle.targetNodeId : '')
       : '-';
+  const tooltipPlacement = useMemo(
+    () => tooltipPlacementForNode(selectedCurrentNodeId),
+    [selectedCurrentNodeId],
+  );
+  const tooltipClassName =
+    'network-selection-tooltip is-' + tooltipPlacement.vertical + ' is-' + tooltipPlacement.horizontal +
+    (tooltipPosition ? ' is-dragged' : '');
+  const tooltipStyle: CSSProperties | undefined = tooltipPosition
+    ? { left: tooltipPosition.x, top: tooltipPosition.y }
+    : undefined;
+
+  useEffect(() => {
+    setTooltipPosition(null);
+    tooltipDragRef.current = null;
+  }, [
+    selectedSegment?.resultSide,
+    selectedSegment?.vehicleId,
+    selectedSegment?.status,
+    selectedSegment?.startTime,
+    selectedSegment?.endTime,
+    selectedCurrentNodeId,
+  ]);
+
+  const clampTooltipPosition = (x: number, y: number): TooltipPosition => {
+    const container = mapContainerRef.current;
+    const tooltip = tooltipRef.current;
+    if (!container || !tooltip) return { x, y };
+
+    const maxX = Math.max(TOOLTIP_MARGIN, container.clientWidth - tooltip.offsetWidth - TOOLTIP_MARGIN);
+    const maxY = Math.max(TOOLTIP_MARGIN, container.clientHeight - tooltip.offsetHeight - TOOLTIP_MARGIN);
+    return {
+      x: clamp(x, TOOLTIP_MARGIN, maxX),
+      y: clamp(y, TOOLTIP_MARGIN, maxY),
+    };
+  };
+
+  const handleTooltipPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('button')) return;
+
+    const container = mapContainerRef.current;
+    const tooltip = tooltipRef.current;
+    if (!container || !tooltip) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+    const startX = tooltipRect.left - containerRect.left;
+    const startY = tooltipRect.top - containerRect.top;
+    tooltipDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX,
+      startY,
+    };
+    setTooltipPosition(clampTooltipPosition(startX, startY));
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const handleTooltipPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = tooltipDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    setTooltipPosition(clampTooltipPosition(
+      drag.startX + event.clientX - drag.startClientX,
+      drag.startY + event.clientY - drag.startClientY,
+    ));
+  };
+
+  const handleTooltipPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = tooltipDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+
+    tooltipDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
 
   const waitingByNode = new Map<number, number>();
   for (const p of passengers) {
@@ -329,12 +446,8 @@ export default function NetworkMap({
 
   type PerPassengerMarker = {
     id: number;
-    status: string;
     ox: number; oy: number;
     dx: number; dy: number;
-    originColor: string;
-    hasDest: boolean;
-    destColor: string;
   };
   const perPassengerMarkers = useMemo<PerPassengerMarker[]>(() => {
     if (focusedVehicleId == null) return [];
@@ -351,29 +464,26 @@ export default function NetworkMap({
       const dNode = nodeById.get(p.destinationNodeId);
       if (!oNode || !dNode) continue;
 
-      if (p.status === 'waiting') {
+      if (p.status === 'waiting' || p.status === 'picked_up') {
         markers.push({
-          id: p.id, status: 'waiting',
+          id: p.id,
           ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
-          originColor: PICKUP_COLOR, hasDest: false, destColor: '',
-        });
-      } else if (p.status === 'picked_up') {
-        markers.push({
-          id: p.id, status: 'picked_up',
-          ox: oNode.x, oy: oNode.y, dx: dNode.x, dy: dNode.y,
-          originColor: '#10b981', hasDest: true, destColor: '#10b981',
         });
       }
     }
     return markers;
   }, [hasTimelineSelection, inAnalysis, focusedVehicleId, passengers, selectedPassengers]);
 
+  const panelClassName = embedded ? 'network-panel network-panel-embedded' : 'panel network-panel';
+
   return (
-    <div className="panel network-panel">
-      <h3 className="panel-title">
-        {title ?? (inAnalysis ? `Analysis: Vehicle V${analysisVehicleId}` : 'Sioux Falls Network')}
-      </h3>
-      <div className="network-map-container">
+    <div className={panelClassName}>
+      {!hideTitle ? (
+        <h3 className="panel-title">
+          {title ?? (inAnalysis ? `Analysis: Vehicle V${analysisVehicleId}` : 'Sioux Falls Network')}
+        </h3>
+      ) : null}
+      <div className="network-map-container" ref={mapContainerRef}>
         <svg
           viewBox={`-${PADDING} -${PADDING} ${MAP_WIDTH + PADDING * 2} ${MAP_HEIGHT + PADDING * 2}`}
           preserveAspectRatio="xMidYMid meet"
@@ -443,19 +553,6 @@ export default function NetworkMap({
             );
           })}
 
-          {/* OD pair connection lines (dashed, behind markers) */}
-          {(inAnalysis || hasTimelineSelection) && perPassengerMarkers.map(m => (
-            <line
-              key={`od-${m.id}`}
-              x1={m.ox} y1={m.oy}
-              x2={m.dx} y2={m.dy}
-              stroke={OD_LINE_COLOR}
-              strokeWidth={0.4}
-              strokeOpacity={0.4}
-              strokeDasharray="2 2"
-            />
-          ))}
-
           {/* Nodes */}
           {nodes.map(node => {
             const wCount = waitingByNode.get(node.id) || 0;
@@ -497,36 +594,32 @@ export default function NetworkMap({
             const s = 4;
             return (
               <g key={`req-${m.id}`}>
-                {/* Origin: inverted triangle ▽ above node */}
+                {/* Origin: waiting point */}
                 <polygon
                   points={`${m.ox - 5},${m.oy - s - 3} ${m.ox + 5},${m.oy - s - 3} ${m.ox},${m.oy - 1}`}
-                  fill={m.originColor} fillOpacity={0.85}
+                  fill={PICKUP_COLOR} fillOpacity={0.85}
                   stroke="#fff" strokeWidth={0.3}
                 />
                 <text
                   x={m.ox} y={m.oy - s - 5}
-                  textAnchor="middle" fill={m.originColor}
+                  textAnchor="middle" fill={PICKUP_COLOR}
                   fontSize={3.5} fontWeight="bold"
                 >
                   P{m.id}
                 </text>
-                {/* Destination: triangle △ below node */}
-                {m.hasDest && (
-                  <>
-                    <polygon
-                      points={`${m.dx - 5},${m.dy + s + 1} ${m.dx + 5},${m.dy + s + 1} ${m.dx},${m.dy - s + 3}`}
-                      fill={m.destColor} fillOpacity={0.85}
-                      stroke="#fff" strokeWidth={0.3}
-                    />
-                    <text
-                      x={m.dx} y={m.dy + s + 5}
-                      textAnchor="middle" fill={m.destColor}
-                      fontSize={3.5} fontWeight="bold"
-                    >
-                      D{m.id}
-                    </text>
-                  </>
-                )}
+                {/* Destination: dropoff point */}
+                <polygon
+                  points={`${m.dx - 5},${m.dy + s + 1} ${m.dx + 5},${m.dy + s + 1} ${m.dx},${m.dy - s + 3}`}
+                  fill={DROPOFF_COLOR} fillOpacity={0.85}
+                  stroke="#fff" strokeWidth={0.3}
+                />
+                <text
+                  x={m.dx} y={m.dy + s + 5}
+                  textAnchor="middle" fill={DROPOFF_COLOR}
+                  fontSize={3.5} fontWeight="bold"
+                >
+                  D{m.id}
+                </text>
               </g>
             );
           })}
@@ -563,24 +656,28 @@ export default function NetworkMap({
                   </circle>
                 )}
                 <circle
-                  cx={pos.x} cy={pos.y} r={isFocusedVehicle ? 5 : 4}
+                  cx={pos.x} cy={pos.y} r={isFocusedVehicle ? 6 : 5}
                   fill={vehicleColor(v.status)}
                   stroke="#fff" strokeWidth={isFocusedVehicle ? 1.5 : 1.2}
                 >
                   {!dimmed && (
                     <animate
                       attributeName="r"
-                      values={isFocusedVehicle ? '5;6.5;5' : '4;5;4'}
+                      values={isFocusedVehicle ? '6;7;6' : '5;6;5'}
                       dur="1.5s"
                       repeatCount="indefinite"
                     />
                   )}
                 </circle>
                 <text
-                  x={pos.x} y={pos.y - 7}
+                  x={pos.x} y={pos.y + 0.2}
                   textAnchor="middle" fill="#fff"
-                  fontSize={isFocusedVehicle ? 6 : 5}
+                  dominantBaseline="middle"
+                  fontSize={isFocusedVehicle ? 4.2 : 3.8}
                   fontWeight="bold"
+                  paintOrder="stroke"
+                  stroke="rgba(15, 23, 42, 0.65)"
+                  strokeWidth={0.35}
                 >
                   V{v.id}
                 </text>
@@ -590,8 +687,18 @@ export default function NetworkMap({
         </svg>
 
         {selectedSegment && selectedVehicle && (
-          <div className="network-selection-tooltip">
-            <div className="network-selection-head">
+          <div
+            className={tooltipClassName}
+            ref={tooltipRef}
+            style={tooltipStyle}
+          >
+            <div
+              className="network-selection-head"
+              onPointerDown={handleTooltipPointerDown}
+              onPointerMove={handleTooltipPointerMove}
+              onPointerUp={handleTooltipPointerUp}
+              onPointerCancel={handleTooltipPointerUp}
+            >
               <div className="network-selection-title">
                 {selectedSegment.resultLabel} V{selectedSegment.vehicleId} {selectedSegment.status === 'picking_up' ? 'Picking up' : 'Carrying'}
               </div>
@@ -607,8 +714,10 @@ export default function NetworkMap({
             <div className="network-selection-grid">
               <span>Time</span>
               <strong>t {selectedSegment.startTime}-{selectedSegment.endTime}</strong>
-              <span>Node</span>
-              <strong>{selectedNodeLabel}</strong>
+              <span>Current</span>
+              <strong>{selectedCurrentNodeLabel}</strong>
+              <span>Schedule</span>
+              <strong className="network-selection-schedule">{selectedNodeLabel}</strong>
               <span>Passenger</span>
               <strong>{selectedPassengers.length > 0 ? selectedPassengers.map(p => `P${p.id}`).join(', ') : '-'}</strong>
             </div>
@@ -631,13 +740,7 @@ export default function NetworkMap({
                 <span className="legend-triangle-down" style={{ borderTopColor: PICKUP_COLOR }} /> P: Waiting
               </div>
               <div className="legend-item">
-                <span className="legend-triangle-down" style={{ borderTopColor: '#10b981' }} /> P: Picked up
-              </div>
-              <div className="legend-item">
                 <span className="legend-triangle-up" style={{ borderBottomColor: DROPOFF_COLOR }} /> D: Dropoff
-              </div>
-              <div className="legend-item">
-                <span className="legend-dash" /> OD pair
               </div>
             </>
           ) : (

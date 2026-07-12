@@ -256,6 +256,8 @@ export default function App() {
                 data={history.analysis.timelineData}
                 replayTime={history.replayTime}
                 statusShare={history.analysis.summary}
+                passengerLoadData={history.analysis.passengerLoadData}
+                vehicleCapacity={state.vehCapacity}
               />
             </>
           ) : (
