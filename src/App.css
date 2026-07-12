@@ -2002,17 +2002,16 @@
 }
 
 .vehicle-pattern-segment.has-passenger-event {
-  box-shadow: inset 1px 0 0 rgba(248, 250, 252, 0.82);
+  box-shadow: none;
 }
 
 .vehicle-pattern-segment.has-passenger-event::before {
   position: absolute;
-  top: 2px;
-  bottom: 2px;
+  top: 0;
+  bottom: 0;
   left: 0;
-  width: 1px;
-  border-radius: 999px;
-  background: rgba(248, 250, 252, 0.86);
+  width: 0.5px;
+  background: rgba(248, 250, 252, 0.78);
   content: "";
 }
 
