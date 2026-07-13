@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import NetworkMap from './NetworkMap';
 import VehicleOperationMap, { type OperationHeatStatus } from './VehicleOperationMap';
+import DemandNetworkMap from './DemandNetworkMap';
 import RequestHeatmap from './RequestHeatmap';
 import TemporalComparisonCharts from './TemporalComparisonCharts';
 import VehicleTemporalComparisonCharts from './VehicleTemporalComparisonCharts';
@@ -29,6 +30,13 @@ const SIDE_LABEL: Record<ReplaySide, string> = {
 const SIDE_COLOR: Record<ReplaySide, string> = {
   left: RESULT_A_COLOR,
   right: RESULT_B_COLOR,
+};
+
+const VEHICLE_STATUS_LABEL: Record<VehiclePatternSelection['status'], string> = {
+  idle: 'Idle',
+  picking_up: 'Picking up',
+  carrying: 'Carrying',
+  range: 'Selected range',
 };
 
 interface ComparisonMetricRow {
@@ -253,14 +261,15 @@ function ResultMapPanel({
   );
 }
 
-function ResultRequestHeatmapPanel({
+function ResultDemandNetworkPanel({
   side,
   replay,
   frame,
   replayTime,
-  selectedSegment,
+  comparisonReplay,
   comparisonFrame,
   comparisonReplayTime,
+  selectedSegment,
   comparisonSelectedSegment,
   isExpanded,
   onToggleExpanded,
@@ -269,19 +278,30 @@ function ResultRequestHeatmapPanel({
   replay: LoadedReplay | null;
   frame: SimulationState | null;
   replayTime: number;
-  selectedSegment: VehiclePatternSelection | null;
+  comparisonReplay: LoadedReplay | null;
   comparisonFrame: SimulationState | null;
   comparisonReplayTime: number;
+  selectedSegment: VehiclePatternSelection | null;
   comparisonSelectedSegment: VehiclePatternSelection | null;
   isExpanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const activeSelectedSegment = selectedSegment?.resultSide === side ? selectedSegment : null;
-  const bodyId = `compare-request-heatmap-${side}`;
-  const focusVehicleId = activeSelectedSegment?.vehicleId ?? null;
-  const contextLabel = focusVehicleId == null
-    ? `t=${formatSimTime(replayTime)}`
-    : `V${focusVehicleId} · t=${formatSimTime(replayTime)}`;
+  const bodyId = `compare-demand-network-${side}`;
+  const intervalStart = selectedSegment?.startTime;
+  const intervalEnd = selectedSegment?.endTime;
+  const intervalFrame = intervalEnd == null || !replay
+    ? frame
+    : frameAtOrBefore(replay.frames, intervalEnd);
+  const comparisonIntervalStart = comparisonSelectedSegment?.startTime;
+  const comparisonIntervalEnd = comparisonSelectedSegment?.endTime;
+  const comparisonIntervalFrame = comparisonIntervalEnd == null || !comparisonReplay
+    ? comparisonFrame
+    : frameAtOrBefore(comparisonReplay.frames, comparisonIntervalEnd);
+  const isIntervalContext = intervalStart != null && intervalEnd != null;
+  const hasComparableContext = isIntervalContext &&
+    comparisonIntervalStart != null && comparisonIntervalEnd != null;
+  const hasComparableOverview = !isIntervalContext && comparisonSelectedSegment == null;
+  const panelTitle = isIntervalContext ? 'Demand Context' : 'Demand Network Map';
 
   return (
     <section className={"compare-map-slot compare-heatmap-slot" + (isExpanded ? " is-expanded" : " is-collapsed")}>
@@ -291,32 +311,41 @@ function ResultRequestHeatmapPanel({
           className="compare-map-accordion-head"
           aria-expanded={isExpanded}
           aria-controls={bodyId}
-          aria-label={(isExpanded ? 'Collapse ' : 'Expand ') + SIDE_LABEL[side] + ' request heatmap'}
+          aria-label={(isExpanded ? 'Collapse ' : 'Expand ') + SIDE_LABEL[side] + ' ' + panelTitle.toLowerCase()}
           onClick={onToggleExpanded}
         >
           <span className="compare-map-accordion-labels">
             <span className="compare-map-accordion-title" style={{ color: SIDE_COLOR[side] }}>
-              {SIDE_LABEL[side]} Request Heatmap
+              {SIDE_LABEL[side]} {panelTitle}
             </span>
           </span>
           <span className="compare-map-accordion-icon" aria-hidden="true" />
         </button>
         {isExpanded ? (
           <div id={bodyId} className="compare-map-accordion-body compare-heatmap-accordion-body">
-            {!replay || !frame ? (
+            {!replay || !intervalFrame ? (
               <div className="compare-empty-text">Load a replay JSON file.</div>
-            ) : (
+            ) : isIntervalContext ? (
               <RequestHeatmap
                 embedded
                 hideTitle
-                title={`${SIDE_LABEL[side]} Request Heatmap`}
-                contextLabel={contextLabel}
-                vehicleId={focusVehicleId}
-                passengers={frame.passengers}
+                title={`${SIDE_LABEL[side]} Demand Context`}
+                passengers={intervalFrame.passengers}
+                startTime={intervalStart}
+                replayTime={intervalEnd}
+                comparisonPassengers={hasComparableContext ? comparisonIntervalFrame?.passengers : undefined}
+                comparisonStartTime={comparisonIntervalStart}
+                comparisonReplayTime={hasComparableContext ? comparisonIntervalEnd : undefined}
+              />
+            ) : (
+              <DemandNetworkMap
+                embedded
+                hideTitle
+                title={`${SIDE_LABEL[side]} Demand Network Map`}
+                passengers={intervalFrame.passengers}
                 replayTime={replayTime}
-                comparisonPassengers={comparisonFrame?.passengers}
-                comparisonReplayTime={comparisonFrame ? comparisonReplayTime : undefined}
-                comparisonVehicleId={comparisonSelectedSegment?.vehicleId ?? null}
+                comparisonPassengers={hasComparableOverview ? comparisonFrame?.passengers : undefined}
+                comparisonReplayTime={hasComparableOverview && comparisonFrame ? comparisonReplayTime : undefined}
               />
             )}
           </div>
@@ -353,12 +382,19 @@ function ResultVehicleOperationPanel({
   isExpanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const activeSelectedSegment = selectedSegment?.resultSide === side ? selectedSegment : null;
   const bodyId = `compare-vehicle-operation-map-${side}`;
-  const focusVehicleId = activeSelectedSegment?.vehicleId ?? null;
+  const focusVehicleId = selectedSegment?.vehicleId ?? null;
+  const intervalStart = selectedSegment?.startTime;
+  const intervalEnd = selectedSegment?.endTime;
+  const displayTime = intervalEnd ?? replayTime;
+  const comparisonIntervalStart = comparisonSelectedSegment?.startTime;
+  const comparisonDisplayTime = comparisonSelectedSegment?.endTime ?? comparisonReplayTime;
+  const hasComparableContext = selectedSegment != null && comparisonSelectedSegment != null;
+  const hasComparableOverview = selectedSegment == null && comparisonSelectedSegment == null;
+  const comparisonSource = hasComparableContext || hasComparableOverview ? comparisonReplay : null;
   const contextLabel = focusVehicleId == null
     ? `t=${formatSimTime(replayTime)}`
-    : `V${focusVehicleId} · t=${formatSimTime(replayTime)}`;
+    : `V${focusVehicleId} · t=${formatSimTime(intervalStart ?? replayTime)}-${formatSimTime(displayTime)}`;
 
   return (
     <section className={"compare-map-slot compare-operation-slot" + (isExpanded ? " is-expanded" : " is-collapsed")}>
@@ -390,9 +426,11 @@ function ResultVehicleOperationPanel({
                 contextLabel={contextLabel}
                 focusVehicleId={focusVehicleId}
                 frames={replay.frames}
-                currentTime={replayTime}
-                comparisonFrames={comparisonReplay?.frames}
-                comparisonCurrentTime={comparisonReplay ? comparisonReplayTime : undefined}
+                startTime={intervalStart}
+                currentTime={displayTime}
+                comparisonFrames={comparisonSource?.frames}
+                comparisonStartTime={comparisonIntervalStart}
+                comparisonCurrentTime={comparisonSource ? comparisonDisplayTime : undefined}
                 comparisonFocusVehicleId={comparisonSelectedSegment?.vehicleId ?? null}
                 statusVisibility={statusVisibility}
                 onStatusVisibilityChange={onStatusVisibilityChange}
@@ -521,7 +559,7 @@ export default function ResultCompare() {
     const setError = side === 'left' ? setLeftError : setRightError;
 
     setError(null);
-    setSelectedVehicleSegments(prev => ({ ...prev, [side]: null }));
+    setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
     reader.onload = () => {
       try {
         const text = typeof reader.result === 'string' ? reader.result : '';
@@ -575,7 +613,7 @@ export default function ResultCompare() {
     }
 
     setReplayTimes(prev => ({ ...prev, [side]: time }));
-    setSelectedVehicleSegments(prev => ({ ...prev, [side]: null }));
+    setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
   }, [isReplayTimeSynced, leftReplay, rightReplay]);
 
   const handleReplaySyncToggle = useCallback((enabled: boolean) => {
@@ -588,23 +626,24 @@ export default function ResultCompare() {
   }, [leftReplay, replayTimes.left, replayTimes.right, rightReplay]);
 
   const handleSelectVehicleSegment = useCallback((selection: VehiclePatternSelection) => {
-    setSelectedVehicleSegments(prev => {
-      const current = prev[selection.resultSide];
+    setSelectedVehicleSegments(previous => {
+      const current = previous[selection.resultSide];
       const isSameSelection =
         current?.vehicleId === selection.vehicleId &&
         current.startTime === selection.startTime &&
         current.endTime === selection.endTime &&
         current.status === selection.status;
-
       return {
-        ...prev,
+        ...previous,
         [selection.resultSide]: isSameSelection ? null : selection,
       };
     });
+    setExpandedOperationMaps(previous => ({ ...previous, [selection.resultSide]: true }));
+    setExpandedHeatmaps(previous => ({ ...previous, [selection.resultSide]: true }));
   }, []);
 
   const clearVehicleSegment = useCallback((side: ReplaySide) => {
-    setSelectedVehicleSegments(prev => ({ ...prev, [side]: null }));
+    setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
   }, []);
 
   const toggleNetworkMap = useCallback((side: ReplaySide) => {
@@ -676,6 +715,31 @@ export default function ResultCompare() {
       </aside>
 
       <main className="compare-main">
+        {selectedVehicleSegments.left || selectedVehicleSegments.right ? (
+          <div className="compare-selection-context" role="status">
+            {(['left', 'right'] as ReplaySide[]).map(side => {
+              const selection = selectedVehicleSegments[side];
+              if (!selection) return null;
+              return (
+                <div className="compare-selection-context-item" key={side}>
+                  <span>
+                    {selection.resultLabel} · V{selection.vehicleId} · {VEHICLE_STATUS_LABEL[selection.status]} · {' '}
+                    t={formatSimTime(selection.startTime)}-{formatSimTime(selection.endTime)}
+                  </span>
+                  <button
+                    type="button"
+                    className="compare-selection-clear"
+                    aria-label={`Clear ${selection.resultLabel} selected vehicle interval`}
+                    title={`Clear ${selection.resultLabel} selected interval`}
+                    onClick={() => clearVehicleSegment(side)}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
         <div className={"compare-map-grid" + (hasExpandedNetworkMap ? " has-expanded" : "")}>
           <ResultMapPanel
             side="left"
@@ -727,26 +791,28 @@ export default function ResultCompare() {
           />
         </div>
         <div className={"compare-map-grid compare-heatmap-grid" + (hasExpandedHeatmap ? " has-expanded" : "")}>
-          <ResultRequestHeatmapPanel
+          <ResultDemandNetworkPanel
             side="left"
             replay={leftReplay}
             frame={leftFrame}
             replayTime={replayTimes.left}
-            selectedSegment={selectedVehicleSegments.left}
+            comparisonReplay={rightReplay}
             comparisonFrame={rightFrame}
             comparisonReplayTime={replayTimes.right}
+            selectedSegment={selectedVehicleSegments.left}
             comparisonSelectedSegment={selectedVehicleSegments.right}
             isExpanded={expandedHeatmaps.left}
             onToggleExpanded={() => toggleHeatmap('left')}
           />
-          <ResultRequestHeatmapPanel
+          <ResultDemandNetworkPanel
             side="right"
             replay={rightReplay}
             frame={rightFrame}
             replayTime={replayTimes.right}
-            selectedSegment={selectedVehicleSegments.right}
+            comparisonReplay={leftReplay}
             comparisonFrame={leftFrame}
             comparisonReplayTime={replayTimes.left}
+            selectedSegment={selectedVehicleSegments.right}
             comparisonSelectedSegment={selectedVehicleSegments.left}
             isExpanded={expandedHeatmaps.right}
             onToggleExpanded={() => toggleHeatmap('right')}

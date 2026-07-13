@@ -66,10 +66,10 @@ export function quartileHeatColor(
   density: number,
   [q1, q2, q3]: [number, number, number],
 ): string {
-  if (density >= q3) return '#ef4444';
-  if (density >= q2) return '#f97316';
-  if (density >= q1) return '#facc15';
-  return '#38bdf8';
+  if (density >= q3) return '#e31a1c';
+  if (density >= q2) return '#fd8d3c';
+  if (density >= q1) return '#fecc5c';
+  return '#ffffb2';
 }
 
 export function kernelDisplayRadius(bandwidth: number): number {

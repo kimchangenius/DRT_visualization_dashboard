@@ -15,8 +15,10 @@ interface RequestHeatmapProps {
   contextLabel?: string;
   vehicleId?: number | null;
   passengers: Passenger[];
+  startTime?: number;
   replayTime: number;
   comparisonPassengers?: Passenger[];
+  comparisonStartTime?: number;
   comparisonReplayTime?: number;
   comparisonVehicleId?: number | null;
   embedded?: boolean;
@@ -41,12 +43,13 @@ function getPassengerUnits(passenger: Passenger): number {
 
 function buildNodeIntensities(
   passengers: Passenger[],
+  startTime: number,
   replayTime: number,
 ): NodeRequestIntensity[] {
   const intensityMap = new Map<number, NodeRequestIntensity>();
 
   for (const passenger of passengers) {
-    if (passenger.requestTime > replayTime) continue;
+    if (passenger.requestTime < startTime || passenger.requestTime > replayTime) continue;
     if (!nodeMap.has(passenger.originNodeId)) continue;
 
     const intensity = intensityMap.get(passenger.originNodeId) ?? {
@@ -68,10 +71,13 @@ function buildNodeIntensities(
   );
 }
 
-function requestObservations(intensities: NodeRequestIntensity[]): WeightedSpatialPoint[] {
+function requestObservations(
+  intensities: NodeRequestIntensity[],
+  duration: number,
+): WeightedSpatialPoint[] {
   return intensities.flatMap(intensity => {
     const node = nodeMap.get(intensity.nodeId);
-    return node ? [{ x: node.x, y: node.y, weight: intensity.requestCount }] : [];
+    return node ? [{ x: node.x, y: node.y, weight: intensity.requestCount / duration }] : [];
   });
 }
 
@@ -80,8 +86,10 @@ export default function RequestHeatmap({
   contextLabel,
   vehicleId = null,
   passengers,
+  startTime = Number.NEGATIVE_INFINITY,
   replayTime,
   comparisonPassengers,
+  comparisonStartTime = Number.NEGATIVE_INFINITY,
   comparisonReplayTime,
   comparisonVehicleId = null,
   embedded = false,
@@ -94,24 +102,35 @@ export default function RequestHeatmap({
     [passengers, vehicleId],
   );
   const intensities = useMemo(
-    () => buildNodeIntensities(filteredPassengers, replayTime),
-    [filteredPassengers, replayTime],
+    () => buildNodeIntensities(filteredPassengers, startTime, replayTime),
+    [filteredPassengers, replayTime, startTime],
   );
   const comparisonIntensities = useMemo(() => {
     if (!comparisonPassengers || comparisonReplayTime == null) return [];
     const filteredComparisonPassengers = comparisonVehicleId == null
       ? comparisonPassengers
       : comparisonPassengers.filter(passenger => passenger.assignedVehicleId === comparisonVehicleId);
-    return buildNodeIntensities(filteredComparisonPassengers, comparisonReplayTime);
-  }, [comparisonPassengers, comparisonReplayTime, comparisonVehicleId]);
+    return buildNodeIntensities(
+      filteredComparisonPassengers,
+      comparisonStartTime,
+      comparisonReplayTime,
+    );
+  }, [comparisonPassengers, comparisonReplayTime, comparisonStartTime, comparisonVehicleId]);
   const intensityByNode = useMemo(
     () => new Map(intensities.map(intensity => [intensity.nodeId, intensity])),
     [intensities],
   );
   const kde = useMemo(() => {
-    const observations = requestObservations(intensities);
-    const comparisonObservations = requestObservations(comparisonIntensities);
-    const bandwidth = estimateScottBandwidth([...observations, ...comparisonObservations]);
+    const duration = Number.isFinite(startTime) ? Math.max(1, replayTime - startTime) : 1;
+    const comparisonDuration = Number.isFinite(comparisonStartTime) && comparisonReplayTime != null
+      ? Math.max(1, comparisonReplayTime - comparisonStartTime)
+      : 1;
+    const observations = requestObservations(intensities, duration);
+    const comparisonObservations = requestObservations(comparisonIntensities, comparisonDuration);
+    const bandwidth = estimateScottBandwidth([
+      ...requestObservations(intensities, 1),
+      ...requestObservations(comparisonIntensities, 1),
+    ]);
     const densities = new Map(nodes.map(node => [
       node.id,
       gaussianIntensity(node, observations, bandwidth),
@@ -126,7 +145,7 @@ export default function RequestHeatmap({
       maxDensity: Math.max(0, ...sharedDensities),
       quartiles: densityQuartiles(sharedDensities),
     };
-  }, [intensities, comparisonIntensities]);
+  }, [intensities, comparisonIntensities, startTime, replayTime, comparisonStartTime, comparisonReplayTime]);
   const totalRequests = intensities.reduce((sum, intensity) => sum + intensity.requestCount, 0);
   const totalPassengers = intensities.reduce((sum, intensity) => sum + intensity.passengerCount, 0);
   const panelClassName = embedded ? 'request-heatmap-panel request-heatmap-panel-embedded' : 'panel chart-panel request-heatmap-panel';
@@ -221,7 +240,13 @@ export default function RequestHeatmap({
                       </title>
                     ) : null}
                   </circle>
-                  <text x={node.x} y={node.y + 0.4} textAnchor="middle" dominantBaseline="middle">
+                  <text
+                    x={node.x}
+                    y={node.y + 0.4}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    style={{ fill: intensity && density < kde.quartiles[2] ? '#111827' : '#f8fafc' }}
+                  >
                     {node.label}
                   </text>
                   {intensity ? (
@@ -241,7 +266,7 @@ export default function RequestHeatmap({
             })}
           </svg>
           {intensities.length === 0 ? (
-            <p className="request-heatmap-empty">No calls at this time</p>
+            <p className="request-heatmap-empty">No calls during the selected interval</p>
           ) : null}
         </div>
         <div className="request-heatmap-footer">

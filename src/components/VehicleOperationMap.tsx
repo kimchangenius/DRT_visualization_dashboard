@@ -14,8 +14,10 @@ interface VehicleOperationMapProps {
   title?: string;
   contextLabel?: string;
   frames: SimulationState[];
+  startTime?: number;
   currentTime: number;
   comparisonFrames?: SimulationState[];
+  comparisonStartTime?: number;
   comparisonCurrentTime?: number;
   comparisonFocusVehicleId?: number | null;
   statusVisibility?: Record<OperationHeatStatus, boolean>;
@@ -26,13 +28,14 @@ interface VehicleOperationMapProps {
 }
 
 export type OperationHeatStatus = Extract<VehicleStatus, 'picking_up' | 'carrying'>;
+type ActivityHeatStatus = Extract<VehicleStatus, 'idle' | 'picking_up' | 'carrying'>;
 
 interface VehicleActivityCell {
   key: string;
   x: number;
   y: number;
   sampleCount: number;
-  statusCounts: Record<OperationHeatStatus, number>;
+  statusCounts: Record<ActivityHeatStatus, number>;
   vehicleIds: Set<number>;
 }
 
@@ -44,6 +47,12 @@ const GRID_SIZE = 12;
 const FILTERABLE_STATUSES: OperationHeatStatus[] = ['picking_up', 'carrying'];
 
 const STATUS_LABELS: Record<OperationHeatStatus, string> = {
+  picking_up: 'Pickup',
+  carrying: 'Carrying',
+};
+
+const ACTIVITY_STATUS_LABELS: Record<ActivityHeatStatus, string> = {
+  idle: 'Idle',
   picking_up: 'Pickup',
   carrying: 'Carrying',
 };
@@ -145,19 +154,16 @@ function vehiclePosition(vehicle: Vehicle): { x: number; y: number } {
   return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
 }
 
-function activityObservations(cells: VehicleActivityCell[]): WeightedSpatialPoint[] {
-  return cells.map(cell => ({ x: cell.x, y: cell.y, weight: cell.sampleCount }));
+function activityObservations(
+  cells: VehicleActivityCell[],
+  duration: number,
+): WeightedSpatialPoint[] {
+  return cells.map(cell => ({ x: cell.x, y: cell.y, weight: cell.sampleCount / duration }));
 }
 
-function emptyStatusCounts(): Record<OperationHeatStatus, number> {
+function emptyStatusCounts(): Record<ActivityHeatStatus, number> {
   return {
-    picking_up: 0,
-    carrying: 0,
-  };
-}
-
-function emptyFilterStatusCounts(): Record<OperationHeatStatus, number> {
-  return {
+    idle: 0,
     picking_up: 0,
     carrying: 0,
   };
@@ -167,18 +173,23 @@ function isFilterableStatus(status: VehicleStatus): status is OperationHeatStatu
   return status === 'picking_up' || status === 'carrying';
 }
 
+function isActivityStatus(status: VehicleStatus): status is ActivityHeatStatus {
+  return status === 'idle' || isFilterableStatus(status);
+}
+
 function buildFilterStatusTotals(
   frames: SimulationState[],
+  startTime: number,
   currentTime: number,
   focusVehicleId: number | null,
-): Record<OperationHeatStatus, number> {
-  const totals = emptyFilterStatusCounts();
+): Record<ActivityHeatStatus, number> {
+  const totals = emptyStatusCounts();
 
   for (const frame of frames) {
-    if (frame.metrics.currentTime > currentTime) continue;
+    if (frame.metrics.currentTime < startTime || frame.metrics.currentTime > currentTime) continue;
     for (const vehicle of frame.vehicles) {
       if (focusVehicleId != null && vehicle.id !== focusVehicleId) continue;
-      if (!isFilterableStatus(vehicle.status)) continue;
+      if (!isActivityStatus(vehicle.status)) continue;
       totals[vehicle.status] += 1;
     }
   }
@@ -188,17 +199,20 @@ function buildFilterStatusTotals(
 
 function buildActivityCells(
   frames: SimulationState[],
+  startTime: number,
   currentTime: number,
   focusVehicleId: number | null,
   selectedStatuses: Set<OperationHeatStatus>,
+  includeIdle: boolean,
 ): VehicleActivityCell[] {
   const cellMap = new Map<string, VehicleActivityCell & { xSum: number; ySum: number }>();
 
   for (const frame of frames) {
-    if (frame.metrics.currentTime > currentTime) continue;
+    if (frame.metrics.currentTime < startTime || frame.metrics.currentTime > currentTime) continue;
     for (const vehicle of frame.vehicles) {
       if (focusVehicleId != null && vehicle.id !== focusVehicleId) continue;
-      if (!isFilterableStatus(vehicle.status) || !selectedStatuses.has(vehicle.status)) continue;
+      if (!isActivityStatus(vehicle.status)) continue;
+      if (vehicle.status === 'idle' ? !includeIdle : !selectedStatuses.has(vehicle.status)) continue;
 
       const position = vehiclePosition(vehicle);
       const cellX = Math.round(position.x / GRID_SIZE);
@@ -232,17 +246,51 @@ function buildActivityCells(
 }
 
 function topStatusLabel(cell: VehicleActivityCell): string {
-  const [status, count] = (Object.entries(cell.statusCounts) as Array<[OperationHeatStatus, number]>)
+  const [status, count] = (Object.entries(cell.statusCounts) as Array<[ActivityHeatStatus, number]>)
     .sort((a, b) => b[1] - a[1])[0];
-  return count > 0 ? STATUS_LABELS[status] : '-';
+  return count > 0 ? ACTIVITY_STATUS_LABELS[status] : '-';
+}
+
+interface VehiclePathEdge {
+  key: string;
+  fromNodeId: number;
+  toNodeId: number;
+}
+
+function buildVehiclePathEdges(
+  frames: SimulationState[],
+  startTime: number,
+  currentTime: number,
+  focusVehicleId: number | null,
+): VehiclePathEdge[] {
+  if (focusVehicleId == null) return [];
+  const edgeMap = new Map<string, VehiclePathEdge>();
+  for (const frame of frames) {
+    if (frame.metrics.currentTime < startTime || frame.metrics.currentTime > currentTime) continue;
+    const vehicle = frame.vehicles.find(candidate => candidate.id === focusVehicleId);
+    if (!vehicle || !isActivityStatus(vehicle.status)) continue;
+    const routeNodeIds = routeNodeIdsForVehicle(vehicle);
+    for (let index = 0; index < routeNodeIds.length - 1; index += 1) {
+      const fromNodeId = routeNodeIds[index];
+      const toNodeId = routeNodeIds[index + 1];
+      if (!adjacency.get(fromNodeId)?.has(toNodeId)) continue;
+      const key = fromNodeId < toNodeId
+        ? `${fromNodeId}-${toNodeId}`
+        : `${toNodeId}-${fromNodeId}`;
+      if (!edgeMap.has(key)) edgeMap.set(key, { key, fromNodeId, toNodeId });
+    }
+  }
+  return [...edgeMap.values()];
 }
 
 export default function VehicleOperationMap({
   title = 'Vehicle Activity Heatmap',
   contextLabel,
   frames,
+  startTime,
   currentTime,
   comparisonFrames,
+  comparisonStartTime,
   comparisonCurrentTime,
   comparisonFocusVehicleId = null,
   statusVisibility,
@@ -256,33 +304,56 @@ export default function VehicleOperationMap({
     carrying: true,
   });
   const visibleStatuses = statusVisibility ?? localStatusVisibility;
+  const hasSelectedInterval = startTime != null;
+  const rangeStart = startTime ?? Number.NEGATIVE_INFINITY;
+  const comparisonRangeStart = comparisonStartTime ?? Number.NEGATIVE_INFINITY;
   const selectedStatuses = useMemo(
     () => new Set(FILTERABLE_STATUSES.filter(status => visibleStatuses[status])),
     [visibleStatuses],
   );
   const cells = useMemo(
-    () => buildActivityCells(frames, currentTime, focusVehicleId, selectedStatuses),
-    [frames, currentTime, focusVehicleId, selectedStatuses],
+    () => buildActivityCells(
+      frames,
+      rangeStart,
+      currentTime,
+      focusVehicleId,
+      selectedStatuses,
+      hasSelectedInterval,
+    ),
+    [frames, rangeStart, currentTime, focusVehicleId, selectedStatuses, hasSelectedInterval],
   );
   const comparisonCells = useMemo(
     () => comparisonFrames && comparisonCurrentTime != null
       ? buildActivityCells(
         comparisonFrames,
+        comparisonRangeStart,
         comparisonCurrentTime,
         comparisonFocusVehicleId,
         selectedStatuses,
+        hasSelectedInterval,
       )
       : [],
-    [comparisonFrames, comparisonCurrentTime, comparisonFocusVehicleId, selectedStatuses],
+    [comparisonFrames, comparisonRangeStart, comparisonCurrentTime, comparisonFocusVehicleId, selectedStatuses, hasSelectedInterval],
   );
   const statusTotals = useMemo(
-    () => buildFilterStatusTotals(frames, currentTime, focusVehicleId),
-    [frames, currentTime, focusVehicleId],
+    () => buildFilterStatusTotals(frames, rangeStart, currentTime, focusVehicleId),
+    [frames, rangeStart, currentTime, focusVehicleId],
+  );
+  const pathEdges = useMemo(
+    () => buildVehiclePathEdges(frames, rangeStart, currentTime, focusVehicleId),
+    [frames, rangeStart, currentTime, focusVehicleId],
   );
   const kde = useMemo(() => {
-    const observations = activityObservations(cells);
-    const comparisonObservations = activityObservations(comparisonCells);
-    const bandwidth = estimateScottBandwidth([...observations, ...comparisonObservations]);
+    const duration = hasSelectedInterval ? Math.max(1, currentTime - rangeStart) : 1;
+    const comparisonDuration = hasSelectedInterval && comparisonCurrentTime != null
+      ? Math.max(1, comparisonCurrentTime - comparisonRangeStart)
+      : 1;
+    const observations = activityObservations(cells, duration);
+    const comparisonObservations = activityObservations(comparisonCells, comparisonDuration);
+    const bandwidth = estimateScottBandwidth([
+      ...activityObservations(cells, 1),
+      ...activityObservations(comparisonCells, 1),
+    ]);
     const densities = new Map(cells.map(cell => [
       cell.key,
       gaussianIntensity(cell, observations, bandwidth),
@@ -297,17 +368,12 @@ export default function VehicleOperationMap({
       maxDensity: Math.max(0, ...sharedDensities),
       quartiles: densityQuartiles(sharedDensities),
     };
-  }, [cells, comparisonCells]);
-  const totalSamples = cells.reduce((sum, cell) => sum + cell.sampleCount, 0);
-  const activeVehicles = new Set<number>();
-  for (const cell of cells) {
-    for (const vehicleId of cell.vehicleIds) activeVehicles.add(vehicleId);
-  }
+  }, [cells, comparisonCells, hasSelectedInterval, currentTime, rangeStart, comparisonCurrentTime, comparisonRangeStart]);
   const panelClassName = embedded ? 'vehicle-operation-panel vehicle-operation-panel-embedded' : 'panel chart-panel vehicle-operation-panel';
   const displayContext = contextLabel ?? (focusVehicleId == null ? `t=${currentTime}` : `V${focusVehicleId} · t=${currentTime}`);
-  const emptyText = selectedStatuses.size === 0
+  const emptyText = !hasSelectedInterval && selectedStatuses.size === 0
     ? "Select Pickup or Carrying to show vehicle activity"
-    : "No selected vehicle activity at this time";
+    : "No selected vehicle activity during this interval";
   const handleStatusFilterChange = (status: OperationHeatStatus, checked: boolean) => {
     if (!checked && FILTERABLE_STATUSES.every(candidate => candidate === status || !visibleStatuses[candidate])) {
       return;
@@ -382,6 +448,22 @@ export default function VehicleOperationMap({
               })}
             </g>
 
+            {pathEdges.map(edge => {
+              const from = nodeMap.get(edge.fromNodeId);
+              const to = nodeMap.get(edge.toNodeId);
+              if (!from || !to) return null;
+              return (
+                <line
+                  key={`vehicle-operation-selected-path-${edge.key}`}
+                  x1={from.x}
+                  y1={from.y}
+                  x2={to.x}
+                  y2={to.y}
+                  className="vehicle-operation-selected-path"
+                />
+              );
+            })}
+
             {nodes.map(node => (
               <g key={`vehicle-operation-node-${node.id}`} className="vehicle-operation-node">
                 <circle cx={node.x} cy={node.y} r={4.5} />
@@ -404,13 +486,14 @@ export default function VehicleOperationMap({
                     className="vehicle-operation-hotspot"
                   >
                     <title>
-                      {`${cell.sampleCount} active vehicle samples · KDE ${density.toFixed(4)} · vehicles ${[...cell.vehicleIds].map(id => `V${id}`).join(', ')} · ${STATUS_LABELS.picking_up} ${cell.statusCounts.picking_up}, ${STATUS_LABELS.carrying} ${cell.statusCounts.carrying}`}
+                      {`${cell.sampleCount} active vehicle samples · KDE ${density.toFixed(4)} · vehicles ${[...cell.vehicleIds].map(id => `V${id}`).join(', ')} · Idle ${cell.statusCounts.idle}, ${STATUS_LABELS.picking_up} ${cell.statusCounts.picking_up}, ${STATUS_LABELS.carrying} ${cell.statusCounts.carrying}`}
                     </title>
                   </circle>
                   <text
                     textAnchor="middle"
                     dominantBaseline="middle"
                     className="vehicle-operation-hotspot-label"
+                    style={{ fill: density >= kde.quartiles[2] ? '#f8fafc' : '#111827' }}
                   >
                     {cell.sampleCount}
                   </text>
@@ -424,6 +507,7 @@ export default function VehicleOperationMap({
         </div>
         <div className="vehicle-operation-footer">
           <div className="vehicle-operation-status-mix" aria-label="Vehicle activity status filters">
+            {hasSelectedInterval ? <span>Idle {statusTotals.idle}</span> : null}
             <label className="vehicle-operation-status-filter is-pickup">
               <input
                 type="checkbox"

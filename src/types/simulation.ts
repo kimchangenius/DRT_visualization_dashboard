@@ -172,7 +172,7 @@ export interface VehiclePatternSelection {
   resultSide: 'left' | 'right';
   resultLabel: string;
   vehicleId: number;
-  status: Extract<VehicleStatus, 'picking_up' | 'carrying'>;
+  status: Extract<VehicleStatus, 'idle' | 'picking_up' | 'carrying'> | 'range';
   startTime: number;
   endTime: number;
 }

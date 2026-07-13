@@ -194,13 +194,12 @@ function buildSegmentMovingLinkColors(
   selection: VehiclePatternSelection,
 ): Map<string, string[]> {
   const map = new Map<string, string[]>();
-  const color = vehicleColor(selection.status);
-
   for (const frame of frames) {
     const vehicle = frame.vehicles.find(v => v.id === selection.vehicleId);
-    if (!vehicle || vehicle.status !== selection.status) continue;
+    if (!vehicle || (selection.status !== 'range' && vehicle.status !== selection.status)) continue;
 
     const route = routeNodeIdsForVehicle(vehicle);
+    const color = vehicleColor(vehicle.status);
     for (let i = 0; i < route.length - 1; i++) {
       const key = normalizeEdgeKey(route[i], route[i + 1]);
       if (!map.has(key)) map.set(key, [color]);
@@ -218,7 +217,7 @@ function buildSegmentRouteNodeIds(
 
   for (const frame of frames) {
     const vehicle = frame.vehicles.find(v => v.id === selection.vehicleId);
-    if (!vehicle || vehicle.status !== selection.status) continue;
+    if (!vehicle || (selection.status !== 'range' && vehicle.status !== selection.status)) continue;
     appendRouteNodes(routeNodes, routeNodeIdsForVehicle(vehicle));
   }
 
@@ -230,6 +229,9 @@ function passengerMatchesSelection(
   selection: VehiclePatternSelection,
 ): boolean {
   if (passenger.assignedVehicleId !== selection.vehicleId) return false;
+  if (selection.status === 'range') {
+    return passenger.status === 'waiting' || passenger.status === 'picked_up';
+  }
   if (selection.status === 'picking_up') return passenger.status === 'waiting';
   return passenger.status === 'picked_up';
 }
@@ -700,7 +702,15 @@ export default function NetworkMap({
               onPointerCancel={handleTooltipPointerUp}
             >
               <div className="network-selection-title">
-                {selectedSegment.resultLabel} V{selectedSegment.vehicleId} {selectedSegment.status === 'picking_up' ? 'Picking up' : 'Carrying'}
+                {selectedSegment.resultLabel} V{selectedSegment.vehicleId} {
+                  selectedSegment.status === 'idle'
+                    ? 'Idle'
+                    : selectedSegment.status === 'range'
+                      ? 'Selected range'
+                    : selectedSegment.status === 'picking_up'
+                      ? 'Picking up'
+                      : 'Carrying'
+                }
               </div>
               <button
                 type="button"
