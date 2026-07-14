@@ -301,7 +301,7 @@ function ResultDemandNetworkPanel({
   const hasComparableContext = isIntervalContext &&
     comparisonIntervalStart != null && comparisonIntervalEnd != null;
   const hasComparableOverview = !isIntervalContext && comparisonSelectedSegment == null;
-  const panelTitle = isIntervalContext ? 'Demand Context' : 'Demand Network Map';
+  const panelTitle = isIntervalContext ? 'Interval Demand Context' : 'Demand Network Map';
 
   return (
     <section className={"compare-map-slot compare-heatmap-slot" + (isExpanded ? " is-expanded" : " is-collapsed")}>
@@ -329,7 +329,7 @@ function ResultDemandNetworkPanel({
               <RequestHeatmap
                 embedded
                 hideTitle
-                title={`${SIDE_LABEL[side]} Demand Context`}
+                title={`${SIDE_LABEL[side]} Interval Demand Context`}
                 passengers={intervalFrame.passengers}
                 startTime={intervalStart}
                 replayTime={intervalEnd}
@@ -715,31 +715,6 @@ export default function ResultCompare() {
       </aside>
 
       <main className="compare-main">
-        {selectedVehicleSegments.left || selectedVehicleSegments.right ? (
-          <div className="compare-selection-context" role="status">
-            {(['left', 'right'] as ReplaySide[]).map(side => {
-              const selection = selectedVehicleSegments[side];
-              if (!selection) return null;
-              return (
-                <div className="compare-selection-context-item" key={side}>
-                  <span>
-                    {selection.resultLabel} · V{selection.vehicleId} · {VEHICLE_STATUS_LABEL[selection.status]} · {' '}
-                    t={formatSimTime(selection.startTime)}-{formatSimTime(selection.endTime)}
-                  </span>
-                  <button
-                    type="button"
-                    className="compare-selection-clear"
-                    aria-label={`Clear ${selection.resultLabel} selected vehicle interval`}
-                    title={`Clear ${selection.resultLabel} selected interval`}
-                    onClick={() => clearVehicleSegment(side)}
-                  >
-                    <span aria-hidden="true" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        ) : null}
         <div className={"compare-map-grid" + (hasExpandedNetworkMap ? " has-expanded" : "")}>
           <ResultMapPanel
             side="left"
@@ -818,6 +793,31 @@ export default function ResultCompare() {
             onToggleExpanded={() => toggleHeatmap('right')}
           />
         </div>
+        {selectedVehicleSegments.left || selectedVehicleSegments.right ? (
+          <div className="compare-selection-context" role="status">
+            {(['left', 'right'] as ReplaySide[]).map(side => {
+              const selection = selectedVehicleSegments[side];
+              if (!selection) return null;
+              return (
+                <div className="compare-selection-context-item" key={side}>
+                  <span>
+                    {selection.resultLabel} · V{selection.vehicleId} · {VEHICLE_STATUS_LABEL[selection.status]} · {' '}
+                    t={formatSimTime(selection.startTime)}-{formatSimTime(selection.endTime)}
+                  </span>
+                  <button
+                    type="button"
+                    className="compare-selection-clear"
+                    aria-label={`Clear ${selection.resultLabel} selected vehicle interval`}
+                    title={`Clear ${selection.resultLabel} selected interval`}
+                    onClick={() => clearVehicleSegment(side)}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
         {patternMode === 'vehicle' ? (
           <VehicleTemporalComparisonCharts
             resultA={leftReplay ? { frames: leftReplay.frames } : null}
