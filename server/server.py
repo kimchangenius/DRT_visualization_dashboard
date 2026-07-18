@@ -1,7 +1,5 @@
-import glob
 import os
 import threading
-import time
 
 from flask import Flask
 from flask_cors import CORS
@@ -10,8 +8,11 @@ from flask_socketio import SocketIO, emit
 import app.config as cfg
 from app.agent import DQNAgent
 from app.env_builder import EnvBuilder
+from app.inference_runtime import (
+    dispatch_idle_vehicles as dispatch_idle_vehicles_with_agent,
+    resolve_model_path as find_model_path,
+)
 from app.state_builder import append_history_sample, build_state, sim_config_payload
-from app.vehicle_status import VehicleStatus
 from scripts.gen_scenario_csv import generate_scenario_csv
 
 CURR_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -35,8 +36,6 @@ SCENARIO_HORIZON = int(os.environ.get('DRT_SCENARIO_HORIZON', DEFAULT_SCENARIO_P
 SCENARIO_LAMBDA_BASE = float(os.environ.get('DRT_SCENARIO_LAMBDA_BASE', DEFAULT_SCENARIO_PARAMS.get('lambda_base', 1.0)))
 SCENARIO_LAMBDA_HIGH = float(os.environ.get('DRT_SCENARIO_LAMBDA_HIGH', DEFAULT_SCENARIO_PARAMS.get('lambda_high', 6.0)))
 SCENARIO_POP_P = float(os.environ.get('DRT_SCENARIO_POP_P', DEFAULT_SCENARIO_PARAMS.get('pop_p', 0.75)))
-SIM_TICK_SECONDS = float(os.environ.get('DRT_SIM_TICK_SECONDS', '1.0'))
-
 flask_app = Flask(__name__)
 CORS(flask_app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(flask_app, cors_allowed_origins="*", async_mode="threading")
@@ -50,8 +49,8 @@ selected_scenario = DEFAULT_SCENARIO if DEFAULT_SCENARIO in AVAILABLE_SCENARIOS 
 env_lock = threading.Lock()
 sim_running = False
 scenario_locked = False
-sim_speed = 1
 sim_thread = None
+sim_stop_event = None
 
 utilization_history = []
 passenger_history = []
@@ -66,8 +65,12 @@ def normalize_scenario(value):
     return scenario
 
 
+def active_model_path():
+    return agent_model_path or resolve_model_path()
+
+
 def scenario_config():
-    model_path = resolve_model_path()
+    model_path = active_model_path()
     return {
         **MODEL_CONFIG,
         'scenario': selected_scenario,
@@ -102,29 +105,8 @@ def make_env_builder(scenario):
     )
 
 
-def _existing_h5_files(directory):
-    return [path for path in glob.glob(os.path.join(directory, '*.h5')) if os.path.isfile(path)]
-
-
 def resolve_model_path():
-    env_model_path = os.environ.get('DRT_MODEL_PATH')
-    if env_model_path:
-        return env_model_path
-
-    exact_candidates = [
-        os.path.join(DATA_PATH, MODEL_FILENAME),
-        os.path.join(RESULT_PATH, MODEL_FILENAME),
-    ]
-    for path in exact_candidates:
-        if os.path.exists(path):
-            return path
-
-    for directory in (DATA_PATH, RESULT_PATH):
-        weight_files = _existing_h5_files(directory)
-        if weight_files:
-            return max(weight_files, key=os.path.getmtime)
-
-    return os.path.join(DATA_PATH, MODEL_FILENAME)
+    return find_model_path(DATA_PATH, RESULT_PATH, MODEL_FILENAME)
 
 
 def resolved_model_mtime(path):
@@ -163,7 +145,7 @@ def max_request_count():
 
 
 def scenario_payload():
-    model_path = resolve_model_path()
+    model_path = active_model_path()
     return {
         'selectedScenario': selected_scenario,
         'availableScenarios': list(AVAILABLE_SCENARIOS),
@@ -179,12 +161,13 @@ def meta_payload():
     }
 
 
-def dashboard_state():
+def dashboard_state(metrics=None):
     state = build_state(
         env,
         utilization_history=utilization_history,
         passenger_history=passenger_history,
         config=scenario_config(),
+        metrics=metrics,
     )
     state.update(scenario_payload())
     return state
@@ -203,91 +186,85 @@ def reset_simulation(scenario=None):
 
 
 def dispatch_idle_vehicles():
-    current_agent = ensure_agent()
-
-    while env.has_idle_vehicle():
-        idle_vehicles = [v for v in env.vehicle_list if v.status == VehicleStatus.IDLE]
-        if not idle_vehicles:
-            break
-
-        candidates_by_v = env.enumerate_pair_candidates(idle_vehicles, include_wait=True)
-        has_real_candidate = any(
-            c.get('is_real', 0)
-            for candidates in candidates_by_v.values()
-            for c in candidates
-        )
-        if not has_real_candidate:
-            break
-
-        snapshot = env.get_snapshot()
-        actions = current_agent.act_pickup_assignments(
-            env,
-            snapshot=snapshot,
-            candidates_by_v=candidates_by_v,
-        )
-        if not actions:
-            break
-
-        acted = False
-        for action in actions:
-            request = action.get('request')
-            if request is not None and request not in env.active_request_list:
-                continue
-            env.step(action)
-            acted = True
-
-        if not acted:
-            break
+    dispatch_idle_vehicles_with_agent(env, agent or ensure_agent())
 
 
-def simulation_loop():
-    global sim_running, env
+def simulation_loop(stop_event):
+    global sim_running, sim_stop_event, env
 
-    while sim_running and env is not None:
-        with env_lock:
-            dispatch_idle_vehicles()
+    try:
+        while not stop_event.is_set() and env is not None:
+            with env_lock:
+                if stop_event.is_set():
+                    break
+                dispatch_idle_vehicles()
+                if stop_event.is_set():
+                    break
 
-            env.curr_time += 1
-            env.handle_time_update()
+                env.curr_time += 1
+                env.handle_time_update()
 
-            if env.curr_time % 2 == 0:
-                append_history_sample(env, utilization_history, passenger_history)
+                metrics = None
+                if env.curr_time % 2 == 0:
+                    metrics = append_history_sample(
+                        env,
+                        utilization_history,
+                        passenger_history,
+                    )
 
-            state = dashboard_state()
-            done = env.is_done()
+                state = dashboard_state(metrics=metrics)
+                done = env.is_done()
+                if done:
+                    sim_running = False
+
+            socketio.emit('state', state)
             if done:
-                sim_running = False
+                socketio.emit('sim_done', {})
+                break
 
-        socketio.emit('state', state)
-        if done:
-            socketio.emit('sim_done', {})
-            break
-
-        speed = sim_speed if isinstance(sim_speed, (int, float)) and sim_speed > 0 else 1
-        interval = max(0.05, SIM_TICK_SECONDS / speed)
-        time.sleep(interval)
+            # Do not pace simulation time against wall-clock time. Yield only so
+            # Socket.IO can deliver the emitted state before the next calculation.
+            socketio.sleep(0)
+    except Exception:
+        flask_app.logger.exception('Simulation loop failed.')
+        socketio.emit('sim_error', {'message': 'Simulation loop failed.'})
+    finally:
+        if sim_stop_event is stop_event:
+            sim_running = False
 
 
 def stop_simulation_thread():
-    global sim_running
+    global sim_running, sim_thread, sim_stop_event
     sim_running = False
-    if sim_thread and sim_thread.is_alive():
-        sim_thread.join(timeout=2)
+    thread = sim_thread
+    stop_event = sim_stop_event
+    if stop_event is not None:
+        stop_event.set()
+    if thread and thread.is_alive() and thread is not threading.current_thread():
+        thread.join(timeout=2)
+    if thread is None or not thread.is_alive():
+        if sim_thread is thread:
+            sim_thread = None
+            sim_stop_event = None
 
 
 @socketio.on('connect')
 def handle_connect():
     global env
-    if env is None:
-        reset_simulation(selected_scenario)
     with env_lock:
+        if env is None:
+            reset_simulation(selected_scenario)
         emit('sim_meta', meta_payload())
         emit('state', dashboard_state())
 
 
 @socketio.on('command')
 def handle_command(data):
-    global sim_running, scenario_locked, sim_speed, sim_thread, env
+    global sim_running, scenario_locked, sim_thread, sim_stop_event, env
+
+    if not isinstance(data, dict):
+        emit('command_error', {'message': 'Command payload must be an object.'})
+        return
 
     cmd = data.get('type')
     payload = data.get('payload')
@@ -295,24 +272,33 @@ def handle_command(data):
     if cmd == 'start':
         scenario = normalize_scenario(payload)
         if not sim_running:
-            if env is None or env.is_done() or scenario != selected_scenario:
-                reset_simulation(scenario)
-                emit('sim_meta', meta_payload())
-            emit('state', dashboard_state())
-            sim_running = True
-            scenario_locked = True
-            sim_thread = threading.Thread(target=simulation_loop, daemon=True)
+            stop_simulation_thread()
+            with env_lock:
+                if env is None or env.is_done() or scenario != selected_scenario:
+                    reset_simulation(scenario)
+                    emit('sim_meta', meta_payload())
+                else:
+                    ensure_agent()
+                emit('state', dashboard_state())
+                sim_running = True
+                scenario_locked = True
+                sim_stop_event = threading.Event()
+            sim_thread = threading.Thread(
+                target=simulation_loop,
+                args=(sim_stop_event,),
+                daemon=True,
+            )
             sim_thread.start()
 
     elif cmd == 'stop':
-        sim_running = False
+        stop_simulation_thread()
 
     elif cmd == 'reset':
         reset_scenario = selected_scenario if scenario_locked else payload
         stop_simulation_thread()
-        reset_simulation(reset_scenario)
-        scenario_locked = False
         with env_lock:
+            reset_simulation(reset_scenario)
+            scenario_locked = False
             emit('sim_meta', meta_payload())
             emit('state', dashboard_state())
 
@@ -323,14 +309,13 @@ def handle_command(data):
                 emit('state', dashboard_state())
             return
         stop_simulation_thread()
-        reset_simulation(payload)
         with env_lock:
+            reset_simulation(payload)
             emit('sim_meta', meta_payload())
             emit('state', dashboard_state())
 
-    elif cmd == 'setSpeed':
-        sim_speed = payload if payload else 1
-
+    else:
+        emit('command_error', {'message': f'Unsupported command: {cmd!r}.'})
 
 @flask_app.route('/health')
 def health():

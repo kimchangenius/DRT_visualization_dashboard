@@ -23,7 +23,6 @@ python server.py
 node version >= 18
 
 ```bash
-cd src
 npm install
 npm run dev
 ```

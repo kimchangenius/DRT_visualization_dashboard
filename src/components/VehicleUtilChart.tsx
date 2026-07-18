@@ -1,6 +1,5 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import type { UtilizationTimeSeriesPoint } from '../types/simulation';
-import { CHART_ANIMATION_DURATION_MS } from '../config';
 
 interface VehicleUtilChartProps {
   data: UtilizationTimeSeriesPoint[];
@@ -37,9 +36,7 @@ export default function VehicleUtilChart({ data, replayTime }: VehicleUtilChartP
               strokeWidth={2}
               dot={false}
               activeDot={{ r: 4, fill: '#ec4899' }}
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-              animationEasing="ease-out"
+              isAnimationActive={false}
             />
           </LineChart>
         </ResponsiveContainer>

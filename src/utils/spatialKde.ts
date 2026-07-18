@@ -4,6 +4,19 @@ export interface WeightedSpatialPoint {
   weight: number;
 }
 
+export interface SpatialKdeTarget<Key> {
+  key: Key;
+  x: number;
+  y: number;
+}
+
+export interface SharedSpatialKde<Key> {
+  bandwidth: number;
+  densities: Map<Key, number>;
+  maxDensity: number;
+  quartiles: [number, number, number];
+}
+
 const MIN_BANDWIDTH = 8;
 const MAX_BANDWIDTH = 45;
 const FALLBACK_BANDWIDTH = 18;
@@ -62,6 +75,30 @@ export function densityQuartiles(values: number[]): [number, number, number] {
   ];
 }
 
+export function buildSharedSpatialKde<Key>(
+  targets: SpatialKdeTarget<Key>[],
+  observations: WeightedSpatialPoint[],
+  comparisonTargets: Array<Pick<WeightedSpatialPoint, 'x' | 'y'>>,
+  comparisonObservations: WeightedSpatialPoint[],
+  bandwidthObservations: WeightedSpatialPoint[],
+): SharedSpatialKde<Key> {
+  const bandwidth = estimateScottBandwidth(bandwidthObservations);
+  const densities = new Map(targets.map(target => [
+    target.key,
+    gaussianIntensity(target, observations, bandwidth),
+  ]));
+  const comparisonDensities = comparisonTargets.map(target =>
+    gaussianIntensity(target, comparisonObservations, bandwidth),
+  );
+  const sharedDensities = [...densities.values(), ...comparisonDensities];
+  return {
+    bandwidth,
+    densities,
+    maxDensity: Math.max(0, ...sharedDensities),
+    quartiles: densityQuartiles(sharedDensities),
+  };
+}
+
 export function quartileHeatColor(
   density: number,
   [q1, q2, q3]: [number, number, number],
@@ -70,6 +107,16 @@ export function quartileHeatColor(
   if (density >= q2) return '#fd8d3c';
   if (density >= q1) return '#fecc5c';
   return '#ffffb2';
+}
+
+export function paperQuartileHeatColor(
+  density: number,
+  [q1, q2, q3]: [number, number, number],
+): string {
+  if (density >= q3) return '#2171b5';
+  if (density >= q2) return '#6baed6';
+  if (density >= q1) return '#c6dbef';
+  return '#f7fbff';
 }
 
 export function kernelDisplayRadius(bandwidth: number): number {

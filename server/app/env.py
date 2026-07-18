@@ -23,6 +23,7 @@ class RideSharingEnvironment:
         self.active_request_list = None
         self.done_request_list = None
         self.vehicle_list = None
+        self.dispatch_decisions = None
 
     def reset(self):
         self.curr_time = 0
@@ -31,6 +32,7 @@ class RideSharingEnvironment:
         self.active_request_list = []
         self.done_request_list = []
         self.vehicle_list = []
+        self.dispatch_decisions = []
         self.initialize_vehicles()
         self.handle_time_update(count_idle=False)
         return None
@@ -50,15 +52,16 @@ class RideSharingEnvironment:
             self.active_request_list.append(self.future_request_list.pop(0))
 
         for vehicle in self.vehicle_list:
+            vehicle.update_route_progress(self.curr_time)
             if vehicle.status == VehicleStatus.REJECT:
                 vehicle.status = VehicleStatus.IDLE
             elif count_idle and vehicle.status == VehicleStatus.IDLE:
                 vehicle.idle_time += 1
 
-            if vehicle.status == VehicleStatus.PICKUP and vehicle.target_arrival_time == self.curr_time:
+            if vehicle.status == VehicleStatus.PICKUP and vehicle.target_arrival_time <= self.curr_time:
                 self._finish_pickup(vehicle)
 
-            if vehicle.status == VehicleStatus.DROPOFF and vehicle.target_arrival_time == self.curr_time:
+            if vehicle.status == VehicleStatus.DROPOFF and vehicle.target_arrival_time <= self.curr_time:
                 self._finish_dropoff(vehicle)
 
         self._update_active_requests()
@@ -66,6 +69,7 @@ class RideSharingEnvironment:
 
     def _finish_pickup(self, vehicle):
         request = vehicle.target_request
+        vehicle.finish_route(self.curr_time, 'arrived')
         vehicle.status = VehicleStatus.IDLE
         vehicle.curr_node = vehicle.next_node
         vehicle.next_node = 0
@@ -84,6 +88,7 @@ class RideSharingEnvironment:
 
     def _finish_dropoff(self, vehicle):
         request = vehicle.target_request
+        vehicle.finish_route(self.curr_time, 'arrived')
         vehicle.status = VehicleStatus.IDLE
         vehicle.curr_node = vehicle.next_node
         vehicle.next_node = 0
@@ -107,9 +112,33 @@ class RideSharingEnvironment:
             request.arrival_due_left = max(0, request.arrival_due - self.curr_time)
             if request.status in (RequestStatus.PENDING, RequestStatus.ACCEPTED):
                 request.waiting_time = self.curr_time - request.request_time
+                if request.status == RequestStatus.PENDING:
+                    feasibility = self._pickup_feasibility_diagnostics(request)
+                    request.last_pickup_feasibility = feasibility
+                    self._append_feasibility_history(request, feasibility)
+                    if feasibility['feasibleVehicleCount'] > 0:
+                        request.feasible_but_not_selected_steps += 1
                 if request.waiting_time >= cfg.MAX_WAIT_TIME:
+                    was_assigned = request.assigned_v_id >= 0
                     request.status = RequestStatus.CANCELLED
                     request.cancel_at = self.curr_time
+                    request.cancellation_reason = (
+                        'max_wait_after_assignment'
+                        if was_assigned
+                        else 'max_wait_unassigned'
+                    )
+                    feasibility = request.last_pickup_feasibility or self._empty_pickup_feasibility()
+                    request.cancellation_diagnostics = {
+                        'cancellationTime': self.curr_time,
+                        'waitingTime': request.waiting_time,
+                        'assignedVehicleId': (
+                            request.assigned_v_id + 1
+                            if was_assigned
+                            else None
+                        ),
+                        **feasibility,
+                        'feasibleButNotSelectedSteps': request.feasible_but_not_selected_steps,
+                    }
                     cancelled.append(request)
             elif request.status == RequestStatus.PICKEDUP:
                 request.in_vehicle_time = self.curr_time - request.pickup_at
@@ -118,6 +147,88 @@ class RideSharingEnvironment:
             self._clear_pickup_assignment(request)
             self._remove_if_present(self.active_request_list, request)
             self.done_request_list.append(request)
+
+    @staticmethod
+    def _empty_pickup_feasibility():
+        return {
+            'totalVehicleCount': 0,
+            'availableVehicleCount': 0,
+            'unavailableVehicleCount': 0,
+            'unavailableVehicleIds': [],
+            'capacityBlockedVehicles': 0,
+            'capacityBlockedVehicleIds': [],
+            'pickupDeadlineBlockedVehicles': 0,
+            'pickupDeadlineBlockedVehicleIds': [],
+            'serviceConstraintBlockedVehicles': 0,
+            'serviceConstraintBlockedVehicleIds': [],
+            'feasibleVehicleCount': 0,
+            'feasibleVehicleIds': [],
+            'nearestPickupEta': None,
+        }
+
+    def _pickup_feasibility_diagnostics(self, request):
+        diagnostics = self._empty_pickup_feasibility()
+        diagnostics['totalVehicleCount'] = len(self.vehicle_list)
+
+        pickup_etas = []
+        for vehicle in self.vehicle_list:
+            vehicle_id = vehicle.id + 1
+            if vehicle.status != VehicleStatus.IDLE:
+                diagnostics['unavailableVehicleCount'] += 1
+                diagnostics['unavailableVehicleIds'].append(vehicle_id)
+                continue
+
+            diagnostics['availableVehicleCount'] += 1
+            if cfg.VEH_CAPACITY - vehicle.num_passengers < request.num_passengers:
+                diagnostics['capacityBlockedVehicles'] += 1
+                diagnostics['capacityBlockedVehicleIds'].append(vehicle_id)
+                continue
+
+            pickup_duration = self.network.get_duration(
+                vehicle.curr_node,
+                request.from_node_id,
+            )
+            pickup_etas.append(float(pickup_duration))
+            if request.waiting_time + pickup_duration >= cfg.MAX_WAIT_TIME:
+                diagnostics['pickupDeadlineBlockedVehicles'] += 1
+                diagnostics['pickupDeadlineBlockedVehicleIds'].append(vehicle_id)
+                continue
+            if not self._can_serve_after_pickup(vehicle, request, pickup_duration):
+                diagnostics['serviceConstraintBlockedVehicles'] += 1
+                diagnostics['serviceConstraintBlockedVehicleIds'].append(vehicle_id)
+                continue
+
+            diagnostics['feasibleVehicleCount'] += 1
+            diagnostics['feasibleVehicleIds'].append(vehicle_id)
+
+        diagnostics['nearestPickupEta'] = min(pickup_etas) if pickup_etas else None
+        return diagnostics
+
+    def _append_feasibility_history(self, request, feasibility):
+        diagnostic_fields = (
+            'totalVehicleCount',
+            'availableVehicleCount',
+            'unavailableVehicleCount',
+            'unavailableVehicleIds',
+            'capacityBlockedVehicles',
+            'capacityBlockedVehicleIds',
+            'pickupDeadlineBlockedVehicles',
+            'pickupDeadlineBlockedVehicleIds',
+            'serviceConstraintBlockedVehicles',
+            'serviceConstraintBlockedVehicleIds',
+            'feasibleVehicleCount',
+            'feasibleVehicleIds',
+        )
+        previous = request.feasibility_history[-1] if request.feasibility_history else None
+        if previous is not None and all(
+            previous[field] == feasibility[field]
+            for field in diagnostic_fields
+        ):
+            return
+        request.feasibility_history.append({
+            'time': self.curr_time,
+            **feasibility,
+        })
 
     def _clear_pickup_assignment(self, request):
         if request.assigned_v_id < 0:
@@ -128,6 +239,7 @@ class RideSharingEnvironment:
                 and vehicle.status == VehicleStatus.PICKUP
                 and vehicle.target_request == request
             ):
+                vehicle.finish_route(self.curr_time, 'cancelled')
                 vehicle.status = VehicleStatus.IDLE
                 vehicle.next_node = 0
                 vehicle.target_request = None
@@ -408,20 +520,58 @@ class RideSharingEnvironment:
         self._sync_request_slots()
         self.curr_step += 1
 
+    def record_dispatch_decision(
+        self, action, decision_round, pickup_candidate_request_ids=None,
+    ):
+        action_type = action['action_type']
+        request = action.get('request')
+        if action_type == ActionType.PICKUP:
+            encoded_action_type = 'pickup'
+        elif action_type == ActionType.DROPOFF:
+            encoded_action_type = 'dropoff'
+        elif action_type == ActionType.REJECT:
+            encoded_action_type = 'wait'
+        else:
+            raise ValueError(f'Unknown dispatch action_type: {action_type}')
+
+        if encoded_action_type != 'wait' and request is None:
+            raise ValueError(f'{encoded_action_type} dispatch decision requires a request.')
+
+        decision = {
+            'time': self.curr_time,
+            'decisionRound': int(decision_round),
+            'vehicleId': int(action['vehicle_idx']) + 1,
+            'actionType': encoded_action_type,
+            'requestId': request.id if request is not None else None,
+            'pickupCandidateRequestIds': sorted({
+                int(request_id)
+                for request_id in (pickup_candidate_request_ids or [])
+            }),
+        }
+        self.dispatch_decisions.append(decision)
+        return decision
+
     def _start_pickup(self, vehicle, request):
         assert request is not None and request.status == RequestStatus.PENDING, 'Invalid PICKUP target'
         vehicle.status = VehicleStatus.PICKUP
         vehicle.active_request_list.append(request)
         vehicle.next_node = request.from_node_id
         vehicle.target_request = request
-        pickup_duration = self.network.get_duration(vehicle.curr_node, vehicle.next_node)
+        pickup_duration = vehicle.begin_route(
+            vehicle.next_node,
+            self.curr_time,
+            'pickup',
+            request.id,
+        )
         vehicle.target_arrival_time = self.curr_time + pickup_duration
 
         request.status = RequestStatus.ACCEPTED
         request.assigned_v_id = vehicle.id
+        request.assignment_at = self.curr_time
         vehicle.num_accept += 1
 
         if vehicle.curr_node == vehicle.next_node:
+            vehicle.finish_route(self.curr_time, 'arrived')
             vehicle.status = VehicleStatus.IDLE
             vehicle.next_node = 0
             vehicle.target_request = None
@@ -437,10 +587,16 @@ class RideSharingEnvironment:
         vehicle.status = VehicleStatus.DROPOFF
         vehicle.next_node = request.to_node_id
         vehicle.target_request = request
-        dropoff_duration = self.network.get_duration(vehicle.curr_node, vehicle.next_node)
+        dropoff_duration = vehicle.begin_route(
+            vehicle.next_node,
+            self.curr_time,
+            'dropoff',
+            request.id,
+        )
         vehicle.target_arrival_time = self.curr_time + dropoff_duration
 
         if vehicle.curr_node == vehicle.next_node:
+            vehicle.finish_route(self.curr_time, 'arrived')
             vehicle.status = VehicleStatus.IDLE
             vehicle.next_node = 0
             vehicle.target_request = None

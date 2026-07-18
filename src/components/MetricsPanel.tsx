@@ -54,7 +54,7 @@ export default function MetricsPanel({ metrics, accentColor }: MetricsPanelProps
         color={colors.served}
       />
       <MetricCard
-        label="Canceled Count"
+        label="Canceled Passengers"
         value={cancelledCount}
         color={colors.canceled}
       />

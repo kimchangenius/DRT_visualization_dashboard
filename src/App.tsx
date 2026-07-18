@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useState } from 'react';
 
 import { useWebSocketSimulation } from './hooks/useWebSocketSimulation';
 import { useSimulationHistory } from './hooks/useSimulationHistory';
@@ -14,13 +14,20 @@ import RequestStatusChart from './components/RequestStatusChart';
 import WaitTimeBarChart from './components/WaitTimeBarChart';
 import DetourFactorChart from './components/DetourFactorChart';
 import VehicleTimelineChart from './components/VehicleTimelineChart';
-import ResultCompare from './components/ResultCompare';
 import type { DemandScenario, SimulationConfigPayload } from './types/simulation';
 import { saveReplayJson } from './utils/saveReplay';
 import './App.css';
 
+type AppTab = 'dashboard' | 'compare' | 'analysis';
+
+const ResultCompare = memo(lazy(() => import('./components/ResultCompare')));
+const ResultAnalysis = memo(lazy(() => import('./components/ResultAnalysis')));
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'compare'>('dashboard');
+  const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
+  const [visitedTabs, setVisitedTabs] = useState<Set<AppTab>>(
+    () => new Set<AppTab>(['dashboard']),
+  );
   const history = useSimulationHistory();
 
   const onFrameConsumed = useCallback(
@@ -45,10 +52,11 @@ export default function App() {
   } = useWebSocketSimulation({ onFrameConsumed });
 
   const handleStart = useCallback(() => {
+    if (connectionStatus !== 'connected') return;
     setScenarioSelectionLocked(true);
     setAnalysisEntered(false);
     start(state.selectedScenario);
-  }, [start, state.selectedScenario]);
+  }, [connectionStatus, start, state.selectedScenario]);
 
   const reset = useCallback(() => {
     history.clearHistory();
@@ -69,6 +77,16 @@ export default function App() {
     setAnalysisEntered(true);
     history.setReplayTime(0);
   }, [enterAnalysis, history.setReplayTime]);
+
+  const handleTabChange = useCallback((tab: AppTab) => {
+    setActiveTab(tab);
+    setVisitedTabs(previous => {
+      if (previous.has(tab)) return previous;
+      const next = new Set(previous);
+      next.add(tab);
+      return next;
+    });
+  }, []);
 
   const handleSaveReplay = useCallback(async () => {
     const config: SimulationConfigPayload = {
@@ -138,22 +156,34 @@ export default function App() {
     ? history.replayTime
     : state.metrics.currentTime;
 
+  useEffect(() => {
+    document.body.classList.toggle('is-result-analysis-view', activeTab === 'analysis');
+    return () => document.body.classList.remove('is-result-analysis-view');
+  }, [activeTab]);
+
   return (
-    <div className="app">
+    <div className={`app${activeTab === 'analysis' ? ' is-result-analysis' : ''}`}>
       <nav className="app-tabs" aria-label="Dashboard sections">
         <button
           type="button"
           className={`app-tab${activeTab === 'dashboard' ? ' is-active' : ''}`}
-          onClick={() => setActiveTab('dashboard')}
+          onClick={() => handleTabChange('dashboard')}
         >
           Live Dashboard
         </button>
         <button
           type="button"
           className={`app-tab${activeTab === 'compare' ? ' is-active' : ''}`}
-          onClick={() => setActiveTab('compare')}
+          onClick={() => handleTabChange('compare')}
         >
           Result Compare
+        </button>
+        <button
+          type="button"
+          className={`app-tab${activeTab === 'analysis' ? ' is-active' : ''}`}
+          onClick={() => handleTabChange('analysis')}
+        >
+          Result Analysis
         </button>
       </nav>
 
@@ -178,17 +208,15 @@ export default function App() {
             <aside className="dashboard-left-controls">
               <SimulationControls
                 isRunning={isRunning}
+                canStart={connectionStatus === 'connected'}
                 maxNumVehicles={state.maxNumVehicles}
                 vehCapacity={state.vehCapacity}
-                maxNumRequest={state.maxNumRequest}
                 maxWaitTime={state.maxWaitTime}
                 hiddenDim={state.hiddenDim}
                 batchSize={state.batchSize}
                 learningRate={state.learningRate}
                 selectedScenario={state.selectedScenario}
                 availableScenarios={state.availableScenarios}
-                scenarioSeed={state.scenarioSeed}
-                modelWeightFile={state.modelWeightFile}
                 scenarioSelectionLocked={scenarioSelectionLocked}
                 onScenarioChange={handleScenarioChange}
                 onStart={handleStart}
@@ -274,7 +302,21 @@ export default function App() {
         className={`app-tab-panel${activeTab === 'compare' ? ' is-active' : ''}`}
         aria-hidden={activeTab !== 'compare'}
       >
-        <ResultCompare />
+        {visitedTabs.has('compare') ? (
+          <Suspense fallback={<div className="compare-empty-text">Loading result comparison...</div>}>
+            <ResultCompare />
+          </Suspense>
+        ) : null}
+      </section>
+      <section
+        className={`app-tab-panel${activeTab === 'analysis' ? ' is-active' : ''}`}
+        aria-hidden={activeTab !== 'analysis'}
+      >
+        {visitedTabs.has('analysis') ? (
+          <Suspense fallback={<div className="compare-empty-text">Loading result analysis...</div>}>
+            <ResultAnalysis />
+          </Suspense>
+        ) : null}
       </section>
     </div>
   );

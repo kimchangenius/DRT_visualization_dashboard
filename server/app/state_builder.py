@@ -1,7 +1,4 @@
-from collections import defaultdict
 from datetime import datetime, timezone
-import json
-import os
 
 import app.config as cfg
 from app.vehicle_status import VehicleStatus
@@ -22,6 +19,15 @@ STATUS_MAP_REQ = {
     RequestStatus.SERVED: 'delivered',
     RequestStatus.CANCELLED: 'cancelled',
 }
+
+
+def _request_units(request):
+    units = getattr(request, 'num_passengers', 1)
+    return int(units) if isinstance(units, (int, float)) and units > 0 else 1
+
+
+def _sum_request_units(requests):
+    return sum(_request_units(request) for request in requests)
 
 
 def sim_config_payload(config=None, max_num_request=None):
@@ -45,27 +51,34 @@ def sim_config_payload(config=None, max_num_request=None):
 def extract_vehicle(v, environment):
     status_str = STATUS_MAP_VEH.get(v.status, 'idle')
 
-    path = []
-    path_progress = 0
-    if v.status in (VehicleStatus.PICKUP, VehicleStatus.DROPOFF) and v.next_node > 0:
-        path = [v.curr_node, v.next_node]
-        total_dur = environment.network.get_duration(v.curr_node, v.next_node)
-        if total_dur > 0 and v.target_arrival_time > 0:
-            remaining = v.target_arrival_time - environment.curr_time
-            progress = 1.0 - (remaining / total_dur)
-            path_progress = max(0, min(1, progress))
+    is_moving = (
+        v.status in (VehicleStatus.PICKUP, VehicleStatus.DROPOFF)
+        and v.next_node > 0
+    )
+    if is_moving:
+        v.update_route_progress(environment.curr_time)
 
     return {
         'id': v.id + 1,
         'currentNodeId': v.curr_node,
         'targetNodeId': v.next_node if v.next_node > 0 else None,
-        'path': path,
-        'pathProgress': round(path_progress, 2),
+        'path': list(v.route_nodes) if is_moving else [],
+        'pathProgress': round(v.route_progress, 6) if is_moving else 0,
+        'currentEdgeIndex': v.current_edge_index if is_moving else None,
+        'currentEdgeProgress': (
+            round(v.current_edge_progress, 6) if is_moving else 0
+        ),
+        'routeDistance': (
+            round(v.route_total_distance, 6) if is_moving else 0
+        ),
+        'routeDistanceTravelled': (
+            round(v.route_distance_travelled, 6) if is_moving else 0
+        ),
         'status': status_str,
         'passengerId': v.target_request.id if v.target_request else None,
         'numPassengers': int(getattr(v, 'num_passengers', 0)),
         'totalTrips': v.num_serve,
-        'totalDistance': 0,
+        'totalDistance': round(v.total_distance, 6),
     }
 
 
@@ -84,11 +97,15 @@ def extract_passenger(r):
         'originNodeId': r.from_node_id,
         'destinationNodeId': r.to_node_id,
         'directTravelTime': r.travel_time,
-        'numPassengers': int(getattr(r, 'num_passengers', 1)),
+        'numPassengers': _request_units(r),
         'requestTime': r.request_time,
         'pickupTime': r.pickup_at,
         'deliveryTime': r.dropoff_at,
         'cancellationTime': _request_cancellation_time(r),
+        'assignmentTime': getattr(r, 'assignment_at', None),
+        'cancellationReason': getattr(r, 'cancellation_reason', None),
+        'cancellationDiagnostics': getattr(r, 'cancellation_diagnostics', None),
+        'feasibilityHistory': list(getattr(r, 'feasibility_history', []) or []),
         'status': STATUS_MAP_REQ.get(r.status, 'waiting'),
         'assignedVehicleId': (r.assigned_v_id + 1) if r.assigned_v_id >= 0 else None,
     }
@@ -108,46 +125,37 @@ def compute_metrics(environment):
         v for v in environment.vehicle_list
         if v.status not in (VehicleStatus.IDLE, VehicleStatus.REJECT)
     ]
+    cancelled = [
+        r for r in environment.done_request_list
+        if r.status == RequestStatus.CANCELLED
+    ]
+    served_units = _sum_request_units(served)
+    waiting_units = _sum_request_units(waiting)
+    in_transit_units = _sum_request_units(in_transit)
+    cancelled_units = _sum_request_units(cancelled)
 
     avg_wait = 0.0
-    if served:
-        avg_wait = sum(r.waiting_time for r in served) / len(served)
+    if served_units:
+        avg_wait = sum(r.waiting_time * _request_units(r) for r in served) / served_units
 
     avg_travel = 0.0
-    if served:
-        avg_travel = sum(r.in_vehicle_time for r in served if r.in_vehicle_time > 0) / max(len(served), 1)
+    if served_units:
+        avg_travel = sum(r.in_vehicle_time * _request_units(r) for r in served) / served_units
 
     util = round(len(busy) / len(environment.vehicle_list) * 100) if environment.vehicle_list else 0
-    cancelled = sum(1 for r in environment.done_request_list if r.status == RequestStatus.CANCELLED)
 
     return {
         'currentTime': environment.curr_time,
-        'totalPassengersServed': len(served),
-        'totalPassengersWaiting': len(waiting),
-        'totalPassengersInTransit': len(in_transit),
+        'totalPassengersServed': served_units,
+        'totalPassengersWaiting': waiting_units,
+        'totalPassengersInTransit': in_transit_units,
         'averageWaitTime': round(avg_wait, 1),
         'averageTravelTime': round(avg_travel, 1),
         'vehicleUtilization': util,
-        'cancelCount': cancelled,
+        'cancelCount': cancelled_units,
         'activeVehicles': len(busy),
         'totalVehicles': len(environment.vehicle_list),
     }
-
-
-def compute_wait_time_distribution(environment):
-    buckets = {'0-2': 0, '3-5': 0, '6-10': 0, '10+': 0}
-    for r in environment.done_request_list:
-        if r.status == RequestStatus.SERVED and r.waiting_time is not None:
-            wt = r.waiting_time
-            if wt <= 2:
-                buckets['0-2'] += 1
-            elif wt <= 5:
-                buckets['3-5'] += 1
-            elif wt <= 10:
-                buckets['6-10'] += 1
-            else:
-                buckets['10+'] += 1
-    return [{'range': k, 'count': v} for k, v in buckets.items()]
 
 
 def compute_request_status(environment):
@@ -164,14 +172,6 @@ def compute_request_status(environment):
         {'name': 'Waiting', 'value': waiting, 'color': '#f59e0b'},
         {'name': 'Cancelled', 'value': cancelled, 'color': '#ef4444'},
     ]
-
-
-def compute_link_loads(environment):
-    loads = defaultdict(int)
-    for v in environment.vehicle_list:
-        if v.status in (VehicleStatus.PICKUP, VehicleStatus.DROPOFF) and v.next_node > 0:
-            loads[f'{v.curr_node}-{v.next_node}'] += 1
-    return dict(loads)
 
 
 def append_history_sample(environment, utilization_history, passenger_history, limit=200):
@@ -191,13 +191,17 @@ def append_history_sample(environment, utilization_history, passenger_history, l
     })
     if len(passenger_history) > limit:
         passenger_history.pop(0)
+    return metrics
 
 
-def build_state(environment, utilization_history=None, passenger_history=None, config=None):
+def build_state(
+    environment, utilization_history=None, passenger_history=None, config=None,
+    metrics=None, include_live_series=True,
+):
     utilization_history = utilization_history or []
     passenger_history = passenger_history or []
 
-    metrics = compute_metrics(environment)
+    metrics = metrics or compute_metrics(environment)
     max_num_request = len(getattr(environment, 'original_request_list', []) or [])
 
     active_passengers = [
@@ -219,11 +223,11 @@ def build_state(environment, utilization_history=None, passenger_history=None, c
         **sim_config_payload(config, max_num_request=max_num_request),
         'vehicles': [extract_vehicle(v, environment) for v in environment.vehicle_list],
         'passengers': visible_passengers,
-        'waitTimeDistribution': compute_wait_time_distribution(environment),
-        'utilizationHistory': list(utilization_history),
-        'passengerHistory': list(passenger_history),
-        'requestStatusData': compute_request_status(environment),
-        'linkLoads': compute_link_loads(environment),
+        'vehicleMovementEvents': encode_recent_vehicle_movements(environment),
+        'dispatchDecisionEvents': encode_recent_dispatch_decisions(environment),
+        'utilizationHistory': list(utilization_history) if include_live_series else [],
+        'passengerHistory': list(passenger_history) if include_live_series else [],
+        'requestStatusData': compute_request_status(environment) if include_live_series else [],
     }
 
 
@@ -235,43 +239,196 @@ def json_default(obj):
     raise TypeError(f'{type(obj).__name__} is not JSON serializable')
 
 
-def create_replay():
+def encode_passenger_events(frames):
+    latest_passengers = {}
+    assigned_vehicle_by_request = {}
+    ordered_frames = sorted(
+        frames,
+        key=lambda frame: frame.get('metrics', {}).get('currentTime', 0),
+    )
+    for frame in ordered_frames:
+        for passenger in frame.get('passengers', []):
+            request_id = passenger.get('id')
+            if request_id is None:
+                continue
+            latest_passengers[request_id] = passenger
+            assigned_vehicle_id = passenger.get('assignedVehicleId')
+            if assigned_vehicle_id is not None:
+                assigned_vehicle_by_request[request_id] = assigned_vehicle_id
+
+    events = []
+    for request_id, passenger in latest_passengers.items():
+        vehicle_id = (
+            passenger.get('assignedVehicleId')
+            or assigned_vehicle_by_request.get(request_id)
+        )
+        if vehicle_id is None:
+            continue
+        passenger_count = passenger.get('numPassengers', 1)
+        if not isinstance(passenger_count, (int, float)) or passenger_count <= 0:
+            passenger_count = 1
+
+        pickup_time = passenger.get('pickupTime')
+        if pickup_time is not None:
+            events.append({
+                'time': pickup_time,
+                'type': 'pickup',
+                'vehicleId': vehicle_id,
+                'passengerId': request_id,
+                'passengerCount': int(passenger_count),
+                'nodeId': passenger.get('originNodeId'),
+            })
+        delivery_time = passenger.get('deliveryTime')
+        if delivery_time is not None:
+            events.append({
+                'time': delivery_time,
+                'type': 'dropoff',
+                'vehicleId': vehicle_id,
+                'passengerId': request_id,
+                'passengerCount': int(passenger_count),
+                'nodeId': passenger.get('destinationNodeId'),
+            })
+
+    return sorted(events, key=lambda event: (
+        event['time'],
+        event['vehicleId'],
+        event['passengerId'],
+        0 if event['type'] == 'pickup' else 1,
+    ))
+
+
+def _encode_vehicle_movement(vehicle_id, movement):
     return {
-        'frames': [],
-        'utilizationHistory': [],
-        'passengerHistory': [],
+        'vehicleId': vehicle_id,
+        'requestId': movement['request_id'],
+        'movementType': movement['movement_type'],
+        'startTime': movement['start_time'],
+        'endTime': movement['end_time'],
+        'scheduledEndTime': movement['scheduled_end_time'],
+        'endReason': movement['end_reason'],
+        'routeNodeIds': list(movement['route_node_ids']),
+        'edges': [
+            {
+                'fromNodeId': edge['from_node_id'],
+                'toNodeId': edge['to_node_id'],
+                'travelTime': edge['travel_time'],
+                'distance': edge['distance'],
+                'distanceTravelled': edge['distance_travelled'],
+            }
+            for edge in movement['edges']
+        ],
+        'plannedDistance': movement['planned_distance'],
+        'travelledDistance': movement['travelled_distance'],
+        'cumulativeDistance': movement['cumulative_distance'],
     }
 
 
-def capture_replay_frame(environment, replay, config=None, history_sample_interval=2):
-    if replay is None:
-        return
-
-    utilization_history = replay.setdefault('utilizationHistory', [])
-    passenger_history = replay.setdefault('passengerHistory', [])
-    curr_time = environment.curr_time
-
-    if curr_time > 0 and curr_time % history_sample_interval == 0:
-        if replay.get('lastHistorySampleTime') != curr_time:
-            append_history_sample(environment, utilization_history, passenger_history)
-            replay['lastHistorySampleTime'] = curr_time
-
-    replay.setdefault('frames', []).append(
-        build_state(
-            environment,
-            utilization_history=utilization_history,
-            passenger_history=passenger_history,
-            config=config,
+def encode_vehicle_movements(environment):
+    movements = []
+    current_time = getattr(environment, 'curr_time', 0)
+    for vehicle in getattr(environment, 'vehicle_list', []) or []:
+        vehicle_movements = list(
+            getattr(vehicle, 'movement_history', []) or []
         )
+        active_movement = vehicle.active_movement_snapshot(current_time)
+        if active_movement is not None:
+            vehicle_movements.append(active_movement)
+        movements.extend(
+            _encode_vehicle_movement(vehicle.id + 1, movement)
+            for movement in vehicle_movements
+        )
+    return sorted(
+        movements,
+        key=lambda movement: (
+            movement['startTime'],
+            movement['vehicleId'],
+            movement['requestId'] or -1,
+            movement['movementType'],
+        ),
     )
 
 
+def encode_recent_vehicle_movements(environment):
+    current_time = float(getattr(environment, 'curr_time', 0))
+    interval_start = max(0.0, current_time - 1.0)
+    movements = []
+    for vehicle in getattr(environment, 'vehicle_list', []) or []:
+        for movement in getattr(vehicle, 'movement_history', []) or []:
+            if interval_start <= movement['end_time'] <= current_time:
+                movements.append(
+                    _encode_vehicle_movement(vehicle.id + 1, movement)
+                )
+        active_movement = vehicle.active_movement_snapshot(current_time)
+        if active_movement is not None:
+            movements.append(
+                _encode_vehicle_movement(vehicle.id + 1, active_movement)
+            )
+    return sorted(
+        movements,
+        key=lambda movement: (
+            movement['endTime'],
+            movement['vehicleId'],
+            movement['requestId'],
+            movement['movementType'],
+        ),
+    )
+
+
+def encode_dispatch_decisions(environment):
+    decisions = [
+        {
+            'time': decision['time'],
+            'decisionRound': decision['decisionRound'],
+            'vehicleId': decision['vehicleId'],
+            'actionType': decision['actionType'],
+            'requestId': decision['requestId'],
+            'pickupCandidateRequestIds': list(
+                decision['pickupCandidateRequestIds']
+            ),
+        }
+        for decision in (getattr(environment, 'dispatch_decisions', None) or [])
+    ]
+    return sorted(
+        decisions,
+        key=lambda decision: (
+            decision['time'],
+            decision['decisionRound'],
+            decision['vehicleId'],
+        ),
+    )
+
+
+def encode_recent_dispatch_decisions(environment):
+    current_time = float(getattr(environment, 'curr_time', 0))
+    interval_start = max(0.0, current_time - 1.0)
+    return [
+        decision
+        for decision in encode_dispatch_decisions(environment)
+        if interval_start <= decision['time'] <= current_time
+    ]
+
+
 def build_simulation_replay_payload(
-    environment, replay, config=None, run_name='inference', version=1,
+    environment, replay, config=None, run_name='inference', version=4,
     generated_at=None,
 ):
+    if version != 4:
+        raise ValueError('Replay version must be 4.')
     generated_at = generated_at or datetime.now(timezone.utc).isoformat()
-    return {
+    frames_by_time = {
+        frame.get('metrics', {}).get('currentTime', index): frame
+        for index, frame in enumerate(replay.get('frames', []))
+    }
+    frames = []
+    for time in sorted(frames_by_time):
+        frame = dict(frames_by_time[time])
+        frame['vehicleMovementEvents'] = []
+        frame['dispatchDecisionEvents'] = []
+        frame['utilizationHistory'] = []
+        frame['passengerHistory'] = []
+        frame['requestStatusData'] = []
+        frames.append(frame)
+    payload = {
         'version': version,
         'generatedAt': generated_at,
         'runName': run_name,
@@ -279,19 +436,10 @@ def build_simulation_replay_payload(
             config,
             max_num_request=len(getattr(environment, 'original_request_list', []) or []),
         ),
-        'frames': replay.get('frames', []),
+        'frames': frames,
     }
-
-
-def save_simulation_replay_json(
-    path, environment, replay, config=None, run_name='inference',
-    filename='simulation_replay.json',
-):
-    os.makedirs(path, exist_ok=True)
-    payload = build_simulation_replay_payload(
-        environment, replay, config=config, run_name=run_name,
-    )
-    filepath = os.path.join(path, filename)
-    with open(filepath, mode='w', encoding='utf-8') as jsonfile:
-        json.dump(payload, jsonfile, ensure_ascii=False, indent=2, default=json_default)
-    return filepath
+    payload['passengerEvents'] = encode_passenger_events(frames)
+    payload['distanceUnit'] = 'network_distance_unit'
+    payload['vehicleMovements'] = encode_vehicle_movements(environment)
+    payload['dispatchDecisions'] = encode_dispatch_decisions(environment)
+    return payload

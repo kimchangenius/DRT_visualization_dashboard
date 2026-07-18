@@ -10,6 +10,8 @@ class Request:
     def __init__(self, request_id, from_node_id, to_node_id, request_time, network,
                  num_passengers=1):
         self.num_passengers = int(num_passengers)
+        if self.num_passengers <= 0:
+            raise ValueError('num_passengers must be a positive integer')
 
         # 불변
         self.id = request_id
@@ -34,6 +36,12 @@ class Request:
         self.pickup_at = None
         self.dropoff_at = None
         self.cancel_at = None
+        self.assignment_at = None
+        self.cancellation_reason = None
+        self.cancellation_diagnostics = None
+        self.feasible_but_not_selected_steps = 0
+        self.last_pickup_feasibility = None
+        self.feasibility_history = []
 
     def __str__(self):
         return (f"<R>(id={self.id} / "

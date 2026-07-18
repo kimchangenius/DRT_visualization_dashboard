@@ -73,18 +73,17 @@ export const links: NetworkLink[] = [
   link(23, 24, 2, 2), link(24, 23, 2, 2),
 ];
 
-export const nodeMap = new Map(nodes.map(n => [n.id, n]));
+const undirectedLinkKeys = new Set<string>();
+export const undirectedLinks = links.filter(networkLink => {
+  const key = networkLink.from < networkLink.to
+    ? `${networkLink.from}-${networkLink.to}`
+    : `${networkLink.to}-${networkLink.from}`;
+  if (undirectedLinkKeys.has(key)) return false;
+  undirectedLinkKeys.add(key);
+  return true;
+});
 
-export function getAdjacency(): Map<number, { to: number; distance: number }[]> {
-  const adj = new Map<number, { to: number; distance: number }[]>();
-  for (const node of nodes) {
-    adj.set(node.id, []);
-  }
-  for (const l of links) {
-    adj.get(l.from)!.push({ to: l.to, distance: l.distance });
-  }
-  return adj;
-}
+export const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
 const fftAdj = new Map<number, { to: number; time: number }[]>();
 for (const node of nodes) fftAdj.set(node.id, []);

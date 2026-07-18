@@ -1,13 +1,9 @@
 import type { Passenger } from '../types/simulation';
+import { formatOptionalTime } from '../utils/time';
 
 interface RequestInformationProps {
   passengers: Passenger[];
   currentTime: number;
-}
-
-function formatTime(t: number | null): string {
-  if (t == null) return '—';
-  return String(t);
 }
 
 function statusLabel(s: Passenger['status']): string {
@@ -70,7 +66,7 @@ export default function RequestInformation({ passengers, currentTime }: RequestI
                     </span>
                   </td>
                   <td>{p.assignedVehicleId != null ? p.assignedVehicleId : '—'}</td>
-                  <td>{formatTime(p.pickupTime)}</td>
+                  <td>{formatOptionalTime(p.pickupTime)}</td>
                 </tr>
               ))}
             </tbody>

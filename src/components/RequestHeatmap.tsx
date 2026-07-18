@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
-import { links, nodeMap, nodes } from '../data/siouxFallsNetwork';
+import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
 import type { Passenger } from '../types/simulation';
+import { passengerUnitCount } from '../utils/vehicleTemporal';
 import {
-  densityQuartiles,
-  estimateScottBandwidth,
-  gaussianIntensity,
+  buildSharedSpatialKde,
   kernelDisplayRadius,
+  paperQuartileHeatColor,
   quartileHeatColor,
   type WeightedSpatialPoint,
 } from '../utils/spatialKde';
@@ -23,6 +23,8 @@ interface RequestHeatmapProps {
   comparisonVehicleId?: number | null;
   embedded?: boolean;
   hideTitle?: boolean;
+  appearance?: 'dashboard' | 'paper';
+  showNodeLabels?: boolean;
 }
 
 interface NodeRequestIntensity {
@@ -35,11 +37,6 @@ interface NodeRequestIntensity {
 const PADDING = 46;
 const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
-
-function getPassengerUnits(passenger: Passenger): number {
-  const count = passenger.numPassengers ?? 1;
-  return Number.isFinite(count) && count > 0 ? count : 1;
-}
 
 function buildNodeIntensities(
   passengers: Passenger[],
@@ -59,7 +56,7 @@ function buildNodeIntensities(
       passengerIds: [],
     };
     intensity.requestCount += 1;
-    intensity.passengerCount += getPassengerUnits(passenger);
+    intensity.passengerCount += passengerUnitCount(passenger);
     intensity.passengerIds.push(passenger.id);
     intensityMap.set(passenger.originNodeId, intensity);
   }
@@ -94,7 +91,11 @@ export default function RequestHeatmap({
   comparisonVehicleId = null,
   embedded = false,
   hideTitle = false,
+  appearance = 'dashboard',
+  showNodeLabels = true,
 }: RequestHeatmapProps) {
+  const heatColor = appearance === 'paper' ? paperQuartileHeatColor : quartileHeatColor;
+  const mapPadding = appearance === 'paper' ? 22 : PADDING;
   const filteredPassengers = useMemo(
     () => vehicleId == null
       ? passengers
@@ -127,24 +128,16 @@ export default function RequestHeatmap({
       : 1;
     const observations = requestObservations(intensities, duration);
     const comparisonObservations = requestObservations(comparisonIntensities, comparisonDuration);
-    const bandwidth = estimateScottBandwidth([
+    return buildSharedSpatialKde(
+      nodes.map(node => ({ key: node.id, x: node.x, y: node.y })),
+      observations,
+      nodes,
+      comparisonObservations,
+      [
       ...requestObservations(intensities, 1),
       ...requestObservations(comparisonIntensities, 1),
-    ]);
-    const densities = new Map(nodes.map(node => [
-      node.id,
-      gaussianIntensity(node, observations, bandwidth),
-    ]));
-    const comparisonDensities = nodes.map(node =>
-      gaussianIntensity(node, comparisonObservations, bandwidth),
+      ],
     );
-    const sharedDensities = [...densities.values(), ...comparisonDensities];
-    return {
-      bandwidth,
-      densities,
-      maxDensity: Math.max(0, ...sharedDensities),
-      quartiles: densityQuartiles(sharedDensities),
-    };
   }, [intensities, comparisonIntensities, startTime, replayTime, comparisonStartTime, comparisonReplayTime]);
   const totalRequests = intensities.reduce((sum, intensity) => sum + intensity.requestCount, 0);
   const totalPassengers = intensities.reduce((sum, intensity) => sum + intensity.passengerCount, 0);
@@ -165,7 +158,7 @@ export default function RequestHeatmap({
       <div className="request-heatmap-container">
         <div className="request-heatmap-svg-wrap">
           <svg
-            viewBox={`-${PADDING} -${PADDING} ${MAP_WIDTH + PADDING * 2} ${MAP_HEIGHT + PADDING * 2}`}
+            viewBox={`-${mapPadding} -${mapPadding} ${MAP_WIDTH + mapPadding * 2} ${MAP_HEIGHT + mapPadding * 2}`}
             preserveAspectRatio="xMidYMid meet"
             className="request-heatmap-svg"
             aria-label={mapLabel}
@@ -176,7 +169,7 @@ export default function RequestHeatmap({
               </filter>
             </defs>
 
-            {links.filter((_, index) => index % 2 === 0).map(link => {
+            {undirectedLinks.map(link => {
               const from = nodeMap.get(link.from);
               const to = nodeMap.get(link.to);
               if (!from || !to) return null;
@@ -198,7 +191,7 @@ export default function RequestHeatmap({
                 if (!node || kde.maxDensity <= 0) return null;
                 const density = kde.densities.get(node.id) ?? 0;
                 const ratio = density / kde.maxDensity;
-                const color = quartileHeatColor(density, kde.quartiles);
+                const color = heatColor(density, kde.quartiles);
                 return (
                   <circle
                     key={`heat-field-${intensity.nodeId}`}
@@ -220,7 +213,12 @@ export default function RequestHeatmap({
             {nodes.map(node => {
               const intensity = intensityByNode.get(node.id);
               const density = kde.densities.get(node.id) ?? 0;
-              const color = intensity ? quartileHeatColor(density, kde.quartiles) : '#1e293b';
+              const emptyNodeFill = appearance === 'paper' ? '#ffffff' : '#1e293b';
+              const emptyNodeStroke = appearance === 'paper' ? '#687178' : '#64748b';
+              const color = intensity ? heatColor(density, kde.quartiles) : emptyNodeFill;
+              const nodeStroke = appearance === 'paper'
+                ? '#202428'
+                : intensity ? '#f8fafc' : emptyNodeStroke;
               const passengerLabel = intensity?.passengerIds.map(id => `P${id}`).join(', ') ?? '';
 
               return (
@@ -229,9 +227,9 @@ export default function RequestHeatmap({
                     cx={node.x}
                     cy={node.y}
                     r={intensity ? 6.4 : 4.5}
-                    fill={intensity ? color : '#1e293b'}
+                    fill={color}
                     fillOpacity={intensity ? 0.88 : 1}
-                    stroke={intensity ? '#f8fafc' : '#64748b'}
+                    stroke={nodeStroke}
                     strokeWidth={intensity ? 0.85 : 0.8}
                   >
                     {intensity ? (
@@ -240,15 +238,21 @@ export default function RequestHeatmap({
                       </title>
                     ) : null}
                   </circle>
-                  <text
-                    x={node.x}
-                    y={node.y + 0.4}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    style={{ fill: intensity && density < kde.quartiles[2] ? '#111827' : '#f8fafc' }}
-                  >
-                    {node.label}
-                  </text>
+                  {showNodeLabels ? (
+                    <text
+                      x={node.x}
+                      y={node.y + 0.4}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      style={{
+                        fill: intensity
+                          ? (density < kde.quartiles[2] ? '#111827' : '#f8fafc')
+                          : (appearance === 'paper' ? '#30363a' : '#f8fafc'),
+                      }}
+                    >
+                      {node.label}
+                    </text>
+                  ) : null}
                   {intensity ? (
                     <g transform={`translate(${node.x + 8.2} ${node.y - 7.2})`}>
                       <circle r={6} className="request-heatmap-count-bg" />

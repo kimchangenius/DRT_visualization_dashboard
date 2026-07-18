@@ -1,19 +1,33 @@
 import { useMemo, useState } from 'react';
-import { links, nodeMap, nodes } from '../data/siouxFallsNetwork';
-import type { SimulationState, Vehicle, VehicleStatus } from '../types/simulation';
+import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
+import type {
+  ReplayVehicleMovement,
+  SimulationState,
+  VehicleStatus,
+} from '../types/simulation';
 import {
-  densityQuartiles,
-  estimateScottBandwidth,
-  gaussianIntensity,
+  areNetworkNeighbors,
+  normalizeEdgeKey,
+  routeNodeIdsForVehicle,
+  vehiclePosition,
+} from '../utils/networkGeometry';
+import {
+  buildSharedSpatialKde,
   kernelDisplayRadius,
+  paperQuartileHeatColor,
   quartileHeatColor,
   type WeightedSpatialPoint,
 } from '../utils/spatialKde';
+import {
+  buildVehicleDistanceFlow,
+  type VehicleDistanceFlowEdge,
+} from '../utils/vehicleDistanceFlow';
 
 interface VehicleOperationMapProps {
   title?: string;
   contextLabel?: string;
   frames: SimulationState[];
+  vehicleMovements?: ReplayVehicleMovement[];
   startTime?: number;
   currentTime: number;
   comparisonFrames?: SimulationState[];
@@ -25,9 +39,16 @@ interface VehicleOperationMapProps {
   focusVehicleId?: number | null;
   embedded?: boolean;
   hideTitle?: boolean;
+  appearance?: 'dashboard' | 'paper';
+  showNodeLabels?: boolean;
+  mode?: VehicleOperationMode;
+  defaultMode?: VehicleOperationMode;
+  showModeControl?: boolean;
+  onModeChange?: (mode: VehicleOperationMode) => void;
 }
 
 export type OperationHeatStatus = Extract<VehicleStatus, 'picking_up' | 'carrying'>;
+export type VehicleOperationMode = 'time-presence' | 'distance-flow';
 type ActivityHeatStatus = Extract<VehicleStatus, 'idle' | 'picking_up' | 'carrying'>;
 
 interface VehicleActivityCell {
@@ -43,6 +64,13 @@ const PADDING = 46;
 const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
 const GRID_SIZE = 12;
+const MIN_DISTANCE_STROKE_WIDTH = 1.15;
+const DISTANCE_STROKE_RANGE = 5.1;
+const EDGE_USAGE_LEGEND_LEVELS = [
+  { label: 'Low', ratio: 0.1 },
+  { label: 'Medium', ratio: 0.5 },
+  { label: 'High', ratio: 1 },
+] as const;
 
 const FILTERABLE_STATUSES: OperationHeatStatus[] = ['picking_up', 'carrying'];
 
@@ -57,101 +85,77 @@ const ACTIVITY_STATUS_LABELS: Record<ActivityHeatStatus, string> = {
   carrying: 'Carrying',
 };
 
-const adjacency = new Map<number, Set<number>>();
-for (const link of links) {
-  if (!adjacency.has(link.from)) adjacency.set(link.from, new Set());
-  if (!adjacency.has(link.to)) adjacency.set(link.to, new Set());
-  adjacency.get(link.from)!.add(link.to);
-  adjacency.get(link.to)!.add(link.from);
+function formatNetworkDistance(distance: number): string {
+  return distance.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: distance < 1 ? 2 : 1,
+  });
 }
 
-function shortestPathOnGraph(from: number, to: number): number[] | null {
-  if (from === to) return [from];
-
-  const queue: number[][] = [[from]];
-  const visited = new Set<number>([from]);
-  while (queue.length > 0) {
-    const path = queue.shift()!;
-    const current = path[path.length - 1];
-    for (const next of adjacency.get(current) ?? []) {
-      if (visited.has(next)) continue;
-      if (next === to) return [...path, next];
-      visited.add(next);
-      queue.push([...path, next]);
-    }
-  }
-  return null;
+function niceDistanceScaleMaximum(maximum: number): number {
+  if (!Number.isFinite(maximum) || maximum <= 0) return 0;
+  const magnitude = 10 ** Math.floor(Math.log10(maximum));
+  const normalized = maximum / magnitude;
+  const multiplier = normalized <= 1
+    ? 1
+    : normalized <= 2
+      ? 2
+      : normalized <= 2.5
+        ? 2.5
+        : normalized <= 5
+          ? 5
+          : 10;
+  return multiplier * magnitude;
 }
 
-function pointAlongPolyline(nodeIds: number[], t: number): { x: number; y: number } | null {
-  if (nodeIds.length === 0) return null;
-  if (nodeIds.length === 1) {
-    const node = nodeMap.get(nodeIds[0]);
-    return node ? { x: node.x, y: node.y } : null;
-  }
-
-  const clamped = Math.min(1, Math.max(0, t));
-  let total = 0;
-  const lengths: number[] = [];
-  for (let index = 0; index < nodeIds.length - 1; index++) {
-    const from = nodeMap.get(nodeIds[index]);
-    const to = nodeMap.get(nodeIds[index + 1]);
-    if (!from || !to) return null;
-    const length = Math.hypot(to.x - from.x, to.y - from.y);
-    lengths.push(length);
-    total += length;
-  }
-
-  if (total <= 0) {
-    const node = nodeMap.get(nodeIds[0]);
-    return node ? { x: node.x, y: node.y } : null;
-  }
-
-  let distance = clamped * total;
-  for (let index = 0; index < nodeIds.length - 1; index++) {
-    const length = lengths[index];
-    const from = nodeMap.get(nodeIds[index])!;
-    const to = nodeMap.get(nodeIds[index + 1])!;
-    if (distance <= length) {
-      const ratio = length > 0 ? distance / length : 0;
-      return {
-        x: from.x + (to.x - from.x) * ratio,
-        y: from.y + (to.y - from.y) * ratio,
-      };
-    }
-    distance -= length;
-  }
-
-  const last = nodeMap.get(nodeIds[nodeIds.length - 1]);
-  return last ? { x: last.x, y: last.y } : null;
+function distanceStrokeWidth(distance: number, scaleMaximum: number): number {
+  if (distance <= 0 || scaleMaximum <= 0) return 0;
+  return MIN_DISTANCE_STROKE_WIDTH +
+    Math.sqrt(Math.min(1, distance / scaleMaximum)) * DISTANCE_STROKE_RANGE;
 }
 
-function routeNodeIdsForVehicle(vehicle: Vehicle): number[] {
-  if (vehicle.path.length >= 2) {
-    if (vehicle.path.length > 2) return vehicle.path;
-    const route = shortestPathOnGraph(vehicle.path[0], vehicle.path[1]);
-    return route && route.length >= 2 ? route : vehicle.path;
+function offsetLine(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  offset: number,
+) {
+  if (offset === 0) {
+    return { x1: from.x, y1: from.y, x2: to.x, y2: to.y };
   }
-
-  if (vehicle.targetNodeId != null) {
-    return shortestPathOnGraph(vehicle.currentNodeId, vehicle.targetNodeId) ?? [
-      vehicle.currentNodeId,
-      vehicle.targetNodeId,
-    ];
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) {
+    return { x1: from.x, y1: from.y, x2: to.x, y2: to.y };
   }
-
-  return [vehicle.currentNodeId];
+  const offsetX = (-dy / length) * offset;
+  const offsetY = (dx / length) * offset;
+  return {
+    x1: from.x + offsetX,
+    y1: from.y + offsetY,
+    x2: to.x + offsetX,
+    y2: to.y + offsetY,
+  };
 }
 
-function vehiclePosition(vehicle: Vehicle): { x: number; y: number } {
-  if (vehicle.path.length >= 2) {
-    const route = routeNodeIdsForVehicle(vehicle);
-    const position = pointAlongPolyline(route, vehicle.pathProgress);
-    if (position) return position;
-  }
-
-  const node = nodeMap.get(vehicle.currentNodeId);
-  return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
+function distanceEdgeTitle(
+  edge: VehicleDistanceFlowEdge,
+  status: OperationHeatStatus,
+): string {
+  const directions = edge.directions
+    .filter(direction => direction.status === status)
+    .map(direction =>
+      `${direction.fromNodeId}→${direction.toNodeId} ${formatNetworkDistance(direction.distance)} (${direction.movementCount})`,
+    )
+    .join(' · ');
+  return [
+    STATUS_LABELS[status],
+    `${edge.fromNodeId}↔${edge.toNodeId}`,
+    `${formatNetworkDistance(edge.statusDistances[status])} weighted edge usage`,
+    `${edge.statusMovementCounts[status]} edge traversals`,
+    `${edge.statusVehicleIds[status].size} vehicles`,
+    directions ? `direction ${directions}` : null,
+  ].filter(Boolean).join(' · ');
 }
 
 function activityObservations(
@@ -273,10 +277,8 @@ function buildVehiclePathEdges(
     for (let index = 0; index < routeNodeIds.length - 1; index += 1) {
       const fromNodeId = routeNodeIds[index];
       const toNodeId = routeNodeIds[index + 1];
-      if (!adjacency.get(fromNodeId)?.has(toNodeId)) continue;
-      const key = fromNodeId < toNodeId
-        ? `${fromNodeId}-${toNodeId}`
-        : `${toNodeId}-${fromNodeId}`;
+      if (!areNetworkNeighbors(fromNodeId, toNodeId)) continue;
+      const key = normalizeEdgeKey(fromNodeId, toNodeId);
       if (!edgeMap.has(key)) edgeMap.set(key, { key, fromNodeId, toNodeId });
     }
   }
@@ -284,9 +286,10 @@ function buildVehiclePathEdges(
 }
 
 export default function VehicleOperationMap({
-  title = 'Vehicle Activity Heatmap',
+  title = 'Vehicle Activity',
   contextLabel,
   frames,
+  vehicleMovements = [],
   startTime,
   currentTime,
   comparisonFrames,
@@ -298,11 +301,21 @@ export default function VehicleOperationMap({
   focusVehicleId = null,
   embedded = false,
   hideTitle = false,
+  appearance = 'dashboard',
+  showNodeLabels = true,
+  mode,
+  defaultMode = 'time-presence',
+  showModeControl = false,
+  onModeChange,
 }: VehicleOperationMapProps) {
+  const heatColor = appearance === 'paper' ? paperQuartileHeatColor : quartileHeatColor;
+  const mapPadding = appearance === 'paper' ? 22 : PADDING;
   const [localStatusVisibility, setLocalStatusVisibility] = useState<Record<OperationHeatStatus, boolean>>({
     picking_up: true,
     carrying: true,
   });
+  const [localMode, setLocalMode] = useState<VehicleOperationMode>(defaultMode);
+  const activeMode = mode ?? localMode;
   const visibleStatuses = statusVisibility ?? localStatusVisibility;
   const hasSelectedInterval = startTime != null;
   const rangeStart = startTime ?? Number.NEGATIVE_INFINITY;
@@ -312,18 +325,28 @@ export default function VehicleOperationMap({
     [visibleStatuses],
   );
   const cells = useMemo(
-    () => buildActivityCells(
+    () => activeMode === 'time-presence'
+      ? buildActivityCells(
+        frames,
+        rangeStart,
+        currentTime,
+        focusVehicleId,
+        selectedStatuses,
+        hasSelectedInterval,
+      )
+      : [],
+    [
+      activeMode,
       frames,
       rangeStart,
       currentTime,
       focusVehicleId,
       selectedStatuses,
       hasSelectedInterval,
-    ),
-    [frames, rangeStart, currentTime, focusVehicleId, selectedStatuses, hasSelectedInterval],
+    ],
   );
   const comparisonCells = useMemo(
-    () => comparisonFrames && comparisonCurrentTime != null
+    () => activeMode === 'time-presence' && comparisonFrames && comparisonCurrentTime != null
       ? buildActivityCells(
         comparisonFrames,
         comparisonRangeStart,
@@ -333,47 +356,117 @@ export default function VehicleOperationMap({
         hasSelectedInterval,
       )
       : [],
-    [comparisonFrames, comparisonRangeStart, comparisonCurrentTime, comparisonFocusVehicleId, selectedStatuses, hasSelectedInterval],
+    [
+      activeMode,
+      comparisonFrames,
+      comparisonRangeStart,
+      comparisonCurrentTime,
+      comparisonFocusVehicleId,
+      selectedStatuses,
+      hasSelectedInterval,
+    ],
   );
   const statusTotals = useMemo(
     () => buildFilterStatusTotals(frames, rangeStart, currentTime, focusVehicleId),
     [frames, rangeStart, currentTime, focusVehicleId],
   );
   const pathEdges = useMemo(
-    () => buildVehiclePathEdges(frames, rangeStart, currentTime, focusVehicleId),
-    [frames, rangeStart, currentTime, focusVehicleId],
+    () => activeMode === 'time-presence'
+      ? buildVehiclePathEdges(frames, rangeStart, currentTime, focusVehicleId)
+      : [],
+    [activeMode, frames, rangeStart, currentTime, focusVehicleId],
+  );
+  const distanceFlow = useMemo(
+    () => activeMode === 'distance-flow'
+      ? buildVehicleDistanceFlow(
+        vehicleMovements,
+        rangeStart,
+        currentTime,
+        focusVehicleId,
+      )
+      : {
+        edges: [],
+        statusDistances: { picking_up: 0, carrying: 0 },
+        totalDistance: 0,
+      },
+    [activeMode, vehicleMovements, rangeStart, currentTime, focusVehicleId],
+  );
+  const visibleDistanceEdges = useMemo(
+    () => distanceFlow.edges.filter(edge =>
+      FILTERABLE_STATUSES.some(status =>
+        visibleStatuses[status] && edge.statusDistances[status] > 0,
+      ),
+    ),
+    [distanceFlow.edges, visibleStatuses],
+  );
+  const overlappingDistanceEdgeKeys = useMemo(() => {
+    if (
+      activeMode !== 'distance-flow' ||
+      !visibleStatuses.picking_up ||
+      !visibleStatuses.carrying
+    ) {
+      return new Set<string>();
+    }
+    return new Set(
+      distanceFlow.edges
+        .filter(edge =>
+          edge.statusDistances.picking_up > 0 &&
+          edge.statusDistances.carrying > 0,
+        )
+        .map(edge => edge.key),
+    );
+  }, [activeMode, distanceFlow.edges, visibleStatuses]);
+  const distanceScaleMaximum = useMemo(
+    () => niceDistanceScaleMaximum(Math.max(
+      0,
+      ...distanceFlow.edges.flatMap(edge =>
+        FILTERABLE_STATUSES.map(status => edge.statusDistances[status]),
+      ),
+    )),
+    [distanceFlow.edges],
   );
   const kde = useMemo(() => {
+    if (activeMode !== 'time-presence') {
+      return buildSharedSpatialKde([], [], [], [], []);
+    }
     const duration = hasSelectedInterval ? Math.max(1, currentTime - rangeStart) : 1;
     const comparisonDuration = hasSelectedInterval && comparisonCurrentTime != null
       ? Math.max(1, comparisonCurrentTime - comparisonRangeStart)
       : 1;
     const observations = activityObservations(cells, duration);
     const comparisonObservations = activityObservations(comparisonCells, comparisonDuration);
-    const bandwidth = estimateScottBandwidth([
-      ...activityObservations(cells, 1),
-      ...activityObservations(comparisonCells, 1),
-    ]);
-    const densities = new Map(cells.map(cell => [
-      cell.key,
-      gaussianIntensity(cell, observations, bandwidth),
-    ]));
-    const comparisonDensities = comparisonCells.map(cell =>
-      gaussianIntensity(cell, comparisonObservations, bandwidth),
+    return buildSharedSpatialKde(
+      cells,
+      observations,
+      comparisonCells,
+      comparisonObservations,
+      [
+        ...activityObservations(cells, 1),
+        ...activityObservations(comparisonCells, 1),
+      ],
     );
-    const sharedDensities = [...densities.values(), ...comparisonDensities];
-    return {
-      bandwidth,
-      densities,
-      maxDensity: Math.max(0, ...sharedDensities),
-      quartiles: densityQuartiles(sharedDensities),
-    };
-  }, [cells, comparisonCells, hasSelectedInterval, currentTime, rangeStart, comparisonCurrentTime, comparisonRangeStart]);
+  }, [
+    activeMode,
+    cells,
+    comparisonCells,
+    hasSelectedInterval,
+    currentTime,
+    rangeStart,
+    comparisonCurrentTime,
+    comparisonRangeStart,
+  ]);
   const panelClassName = embedded ? 'vehicle-operation-panel vehicle-operation-panel-embedded' : 'panel chart-panel vehicle-operation-panel';
   const displayContext = contextLabel ?? (focusVehicleId == null ? `t=${currentTime}` : `V${focusVehicleId} · t=${currentTime}`);
-  const emptyText = !hasSelectedInterval && selectedStatuses.size === 0
-    ? "Select Pickup or Carrying to show vehicle activity"
-    : "No selected vehicle activity during this interval";
+  const emptyText = activeMode === 'distance-flow'
+    ? vehicleMovements.length === 0
+      ? 'Replay has no vehicle movement data'
+      : 'No weighted edge usage during this interval'
+    : !hasSelectedInterval && selectedStatuses.size === 0
+      ? 'Select Pickup or Carrying to show vehicle activity'
+      : 'No selected vehicle activity during this interval';
+  const hasVisibleMapData = activeMode === 'distance-flow'
+    ? visibleDistanceEdges.length > 0
+    : cells.length > 0;
   const handleStatusFilterChange = (status: OperationHeatStatus, checked: boolean) => {
     if (!checked && FILTERABLE_STATUSES.every(candidate => candidate === status || !visibleStatuses[candidate])) {
       return;
@@ -384,6 +477,10 @@ export default function VehicleOperationMap({
     } else {
       setLocalStatusVisibility(nextVisibility);
     }
+  };
+  const handleModeChange = (nextMode: VehicleOperationMode) => {
+    if (mode === undefined) setLocalMode(nextMode);
+    onModeChange?.(nextMode);
   };
 
   return (
@@ -396,11 +493,37 @@ export default function VehicleOperationMap({
       ) : null}
       <div className="vehicle-operation-container">
         <div className="vehicle-operation-svg-wrap">
+          {showModeControl ? (
+            <div className="vehicle-operation-mode-row">
+              <div
+                className="vehicle-operation-mode-toggle"
+                role="group"
+                aria-label="Vehicle activity measure"
+              >
+                <button
+                  type="button"
+                  className={activeMode === 'distance-flow' ? 'is-active' : ''}
+                  aria-pressed={activeMode === 'distance-flow'}
+                  onClick={() => handleModeChange('distance-flow')}
+                >
+                  Distance Flow
+                </button>
+                <button
+                  type="button"
+                  className={activeMode === 'time-presence' ? 'is-active' : ''}
+                  aria-pressed={activeMode === 'time-presence'}
+                  onClick={() => handleModeChange('time-presence')}
+                >
+                  Activity Heatmap
+                </button>
+              </div>
+            </div>
+          ) : null}
           <svg
-            viewBox={`-${PADDING} -${PADDING} ${MAP_WIDTH + PADDING * 2} ${MAP_HEIGHT + PADDING * 2}`}
+            viewBox={`-${mapPadding} -${mapPadding} ${MAP_WIDTH + mapPadding * 2} ${MAP_HEIGHT + mapPadding * 2}`}
             preserveAspectRatio="xMidYMid meet"
             className="vehicle-operation-svg"
-            aria-label={`${title} at ${displayContext}`}
+            aria-label={`${title} ${activeMode === 'distance-flow' ? 'distance flow' : 'time presence'} at ${displayContext}`}
           >
             <defs>
               <filter id="vehicle-operation-blur" x="-35%" y="-35%" width="170%" height="170%">
@@ -408,10 +531,13 @@ export default function VehicleOperationMap({
               </filter>
             </defs>
 
-            {links.filter((_, index) => index % 2 === 0).map(link => {
+            {undirectedLinks.map(link => {
               const from = nodeMap.get(link.from);
               const to = nodeMap.get(link.to);
               if (!from || !to) return null;
+              if (overlappingDistanceEdgeKeys.has(normalizeEdgeKey(link.from, link.to))) {
+                return null;
+              }
               return (
                 <line
                   key={`vehicle-operation-base-link-${link.id}`}
@@ -424,31 +550,67 @@ export default function VehicleOperationMap({
               );
             })}
 
-            <g filter="url(#vehicle-operation-blur)">
-              {cells.map(cell => {
-                if (kde.maxDensity <= 0) return null;
-                const density = kde.densities.get(cell.key) ?? 0;
-                const ratio = density / kde.maxDensity;
-                const color = quartileHeatColor(density, kde.quartiles);
-                return (
-                  <circle
-                    key={`vehicle-activity-field-${cell.key}`}
-                    cx={cell.x}
-                    cy={cell.y}
-                    r={kernelDisplayRadius(kde.bandwidth)}
-                    fill={color}
-                    fillOpacity={0.16 + ratio * 0.34}
-                    className="vehicle-operation-field"
-                  >
-                    <title>
-                      {`${cell.sampleCount} active vehicle samples · ${cell.vehicleIds.size} vehicles · KDE ${density.toFixed(4)} · top status ${topStatusLabel(cell)}`}
-                    </title>
-                  </circle>
-                );
-              })}
-            </g>
+            {activeMode === 'distance-flow' ? (
+              <g className="vehicle-operation-distance-flow">
+                {visibleDistanceEdges.flatMap(edge => {
+                  const from = nodeMap.get(edge.fromNodeId);
+                  const to = nodeMap.get(edge.toNodeId);
+                  if (!from || !to || distanceScaleMaximum <= 0) return [];
+                  const hasBothStatuses = FILTERABLE_STATUSES.every(status =>
+                    visibleStatuses[status] && edge.statusDistances[status] > 0,
+                  );
 
-            {pathEdges.map(edge => {
+                  return FILTERABLE_STATUSES.flatMap(status => {
+                    const distance = edge.statusDistances[status];
+                    if (!visibleStatuses[status] || distance <= 0) return [];
+                    const offset = hasBothStatuses
+                      ? status === 'picking_up' ? -1.7 : 1.7
+                      : 0;
+                    const coordinates = offsetLine(from, to, offset);
+                    const strokeWidth = distanceStrokeWidth(
+                      distance,
+                      distanceScaleMaximum,
+                    );
+                    return [
+                      <line
+                        key={`vehicle-distance-${edge.key}-${status}`}
+                        {...coordinates}
+                        strokeWidth={strokeWidth}
+                        className={`vehicle-operation-distance-edge is-${status === 'picking_up' ? 'pickup' : 'carrying'}`}
+                      >
+                        <title>{distanceEdgeTitle(edge, status)}</title>
+                      </line>,
+                    ];
+                  });
+                })}
+              </g>
+            ) : (
+              <g filter="url(#vehicle-operation-blur)">
+                {cells.map(cell => {
+                  if (kde.maxDensity <= 0) return null;
+                  const density = kde.densities.get(cell.key) ?? 0;
+                  const ratio = density / kde.maxDensity;
+                  const color = heatColor(density, kde.quartiles);
+                  return (
+                    <circle
+                      key={`vehicle-activity-field-${cell.key}`}
+                      cx={cell.x}
+                      cy={cell.y}
+                      r={kernelDisplayRadius(kde.bandwidth)}
+                      fill={color}
+                      fillOpacity={0.16 + ratio * 0.34}
+                      className="vehicle-operation-field"
+                    >
+                      <title>
+                        {`${cell.sampleCount} active vehicle samples · ${cell.vehicleIds.size} vehicles · KDE ${density.toFixed(4)} · top status ${topStatusLabel(cell)}`}
+                      </title>
+                    </circle>
+                  );
+                })}
+              </g>
+            )}
+
+            {activeMode === 'time-presence' ? pathEdges.map(edge => {
               const from = nodeMap.get(edge.fromNodeId);
               const to = nodeMap.get(edge.toNodeId);
               if (!from || !to) return null;
@@ -462,24 +624,26 @@ export default function VehicleOperationMap({
                   className="vehicle-operation-selected-path"
                 />
               );
-            })}
+            }) : null}
 
             {nodes.map(node => (
               <g key={`vehicle-operation-node-${node.id}`} className="vehicle-operation-node">
                 <circle cx={node.x} cy={node.y} r={4.5} />
-                <text x={node.x} y={node.y + 0.4} textAnchor="middle" dominantBaseline="middle">
-                  {node.label}
-                </text>
+                {showNodeLabels ? (
+                  <text x={node.x} y={node.y + 0.4} textAnchor="middle" dominantBaseline="middle">
+                    {node.label}
+                  </text>
+                ) : null}
               </g>
             ))}
 
-            {cells.slice(0, 8).map(cell => {
+            {activeMode === 'time-presence' ? cells.slice(0, 8).map(cell => {
               const density = kde.densities.get(cell.key) ?? 0;
               return (
                 <g key={`vehicle-activity-hotspot-${cell.key}`} transform={`translate(${cell.x} ${cell.y})`}>
                   <circle
                     r={6.8}
-                    fill={quartileHeatColor(density, kde.quartiles)}
+                    fill={heatColor(density, kde.quartiles)}
                     fillOpacity={0.92}
                     stroke="#f8fafc"
                     strokeWidth={0.7}
@@ -499,15 +663,17 @@ export default function VehicleOperationMap({
                   </text>
                 </g>
               );
-            })}
+            }) : null}
           </svg>
-          {cells.length === 0 ? (
+          {!hasVisibleMapData ? (
             <p className="vehicle-operation-empty">{emptyText}</p>
           ) : null}
         </div>
         <div className="vehicle-operation-footer">
           <div className="vehicle-operation-status-mix" aria-label="Vehicle activity status filters">
-            {hasSelectedInterval ? <span>Idle {statusTotals.idle}</span> : null}
+            {activeMode === 'time-presence' && hasSelectedInterval
+              ? <span>Idle {statusTotals.idle}</span>
+              : null}
             <label className="vehicle-operation-status-filter is-pickup">
               <input
                 type="checkbox"
@@ -515,7 +681,15 @@ export default function VehicleOperationMap({
                 onClick={event => event.stopPropagation()}
                 onChange={event => handleStatusFilterChange('picking_up', event.currentTarget.checked)}
               />
-              <span>Pickup {statusTotals.picking_up}</span>
+              <span
+                title={activeMode === 'distance-flow'
+                  ? 'Total pickup weighted edge usage'
+                  : undefined}
+              >
+                Pickup {activeMode === 'distance-flow'
+                  ? formatNetworkDistance(distanceFlow.statusDistances.picking_up)
+                  : statusTotals.picking_up}
+              </span>
             </label>
             <label className="vehicle-operation-status-filter is-carrying">
               <input
@@ -524,14 +698,55 @@ export default function VehicleOperationMap({
                 onClick={event => event.stopPropagation()}
                 onChange={event => handleStatusFilterChange('carrying', event.currentTarget.checked)}
               />
-              <span>Carrying {statusTotals.carrying}</span>
+              <span
+                title={activeMode === 'distance-flow'
+                  ? 'Total carrying weighted edge usage'
+                  : undefined}
+              >
+                Carrying {activeMode === 'distance-flow'
+                  ? formatNetworkDistance(distanceFlow.statusDistances.carrying)
+                  : statusTotals.carrying}
+              </span>
             </label>
           </div>
-          <div className="vehicle-operation-scale" aria-label="Vehicle activity concentration scale">
-            <span>Low</span>
-            <span className="vehicle-operation-scale-bar" />
-            <span>High</span>
-          </div>
+          {activeMode === 'distance-flow' ? (
+            <div
+              className="vehicle-operation-distance-legend"
+              aria-label="Weighted Edge Usage line-width scale: thicker edges indicate greater accumulated weighted usage"
+              title="Thicker edges indicate greater accumulated weighted usage"
+            >
+              <span className="vehicle-operation-distance-legend-title">
+                Weighted Edge Usage
+              </span>
+              <span className="vehicle-operation-distance-legend-samples">
+                {distanceScaleMaximum > 0
+                  ? EDGE_USAGE_LEGEND_LEVELS.map(level => (
+                    <span
+                      key={level.label}
+                      className="vehicle-operation-distance-legend-sample"
+                    >
+                      <i
+                        aria-hidden="true"
+                        style={{
+                          height: `${distanceStrokeWidth(
+                            distanceScaleMaximum * level.ratio,
+                            distanceScaleMaximum,
+                          )}px`,
+                        }}
+                      />
+                      <span>{level.label}</span>
+                    </span>
+                  ))
+                  : <span>No usage</span>}
+              </span>
+            </div>
+          ) : (
+            <div className="vehicle-operation-scale" aria-label="Vehicle activity concentration scale">
+              <span>Low</span>
+              <span className="vehicle-operation-scale-bar" />
+              <span>High</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

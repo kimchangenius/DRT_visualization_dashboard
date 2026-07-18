@@ -21,6 +21,10 @@ export interface Vehicle {
   targetNodeId: number | null;
   path: number[];
   pathProgress: number;
+  currentEdgeIndex?: number | null;
+  currentEdgeProgress?: number;
+  routeDistance?: number;
+  routeDistanceTravelled?: number;
   status: VehicleStatus;
   passengerId: number | null;
   numPassengers?: number;
@@ -29,6 +33,47 @@ export interface Vehicle {
 }
 
 export type PassengerStatus = 'waiting' | 'picked_up' | 'delivered' | 'cancelled';
+
+export type CancellationReason =
+  | 'max_wait_unassigned'
+  | 'max_wait_after_assignment';
+
+export interface CancellationDiagnostics {
+  cancellationTime: number;
+  waitingTime: number;
+  assignedVehicleId: number | null;
+  totalVehicleCount: number;
+  availableVehicleCount: number;
+  unavailableVehicleCount: number;
+  unavailableVehicleIds?: number[];
+  capacityBlockedVehicles: number;
+  capacityBlockedVehicleIds?: number[];
+  pickupDeadlineBlockedVehicles: number;
+  pickupDeadlineBlockedVehicleIds?: number[];
+  serviceConstraintBlockedVehicles: number;
+  serviceConstraintBlockedVehicleIds?: number[];
+  feasibleVehicleCount: number;
+  feasibleVehicleIds?: number[];
+  nearestPickupEta: number | null;
+  feasibleButNotSelectedSteps: number;
+}
+
+export interface CancellationFeasibilityPoint {
+  time: number;
+  totalVehicleCount: number;
+  availableVehicleCount: number;
+  unavailableVehicleCount: number;
+  unavailableVehicleIds?: number[];
+  capacityBlockedVehicles: number;
+  capacityBlockedVehicleIds?: number[];
+  pickupDeadlineBlockedVehicles: number;
+  pickupDeadlineBlockedVehicleIds?: number[];
+  serviceConstraintBlockedVehicles: number;
+  serviceConstraintBlockedVehicleIds?: number[];
+  feasibleVehicleCount: number;
+  feasibleVehicleIds?: number[];
+  nearestPickupEta: number | null;
+}
 
 export interface Passenger {
   id: number;
@@ -40,6 +85,10 @@ export interface Passenger {
   pickupTime: number | null;
   deliveryTime: number | null;
   cancellationTime: number | null;
+  assignmentTime?: number | null;
+  cancellationReason?: CancellationReason | null;
+  cancellationDiagnostics?: CancellationDiagnostics | null;
+  feasibilityHistory?: CancellationFeasibilityPoint[];
   status: PassengerStatus;
   assignedVehicleId: number | null;
 }
@@ -55,16 +104,6 @@ export interface SimulationMetrics {
   cancelCount: number;
   activeVehicles: number;
   totalVehicles: number;
-}
-
-export interface WaitTimeDistribution {
-  range: string;
-  count: number;
-}
-
-export interface TimeSeriesPoint {
-  time: number;
-  value: number;
 }
 
 export interface UtilizationTimeSeriesPoint {
@@ -105,31 +144,64 @@ export interface SimulationState extends SimulationConfigPayload {
   metrics: SimulationMetrics;
   vehicles: Vehicle[];
   passengers: Passenger[];
-  waitTimeDistribution: WaitTimeDistribution[];
+  vehicleMovementEvents?: ReplayVehicleMovement[];
+  dispatchDecisionEvents?: ReplayDispatchDecision[];
   utilizationHistory: UtilizationTimeSeriesPoint[];
   passengerHistory: PassengerTimeSeriesPoint[];
   requestStatusData: RequestStatusData[];
-  linkLoads: Record<string, number>;
+}
+
+export interface ReplayPassengerEvent {
+  time: number;
+  type: 'pickup' | 'dropoff';
+  vehicleId: number;
+  passengerId: number;
+  passengerCount: number;
+  nodeId: number;
+}
+
+export interface ReplayVehicleMovementEdge {
+  fromNodeId: number;
+  toNodeId: number;
+  travelTime: number;
+  distance: number;
+  distanceTravelled: number;
+}
+
+export interface ReplayVehicleMovement {
+  vehicleId: number;
+  requestId: number;
+  movementType: 'pickup' | 'dropoff';
+  startTime: number;
+  endTime: number;
+  scheduledEndTime: number;
+  endReason: 'arrived' | 'cancelled' | 'in_progress';
+  routeNodeIds: number[];
+  edges: ReplayVehicleMovementEdge[];
+  plannedDistance: number;
+  travelledDistance: number;
+  cumulativeDistance: number;
+}
+
+export interface ReplayDispatchDecision {
+  time: number;
+  decisionRound: number;
+  vehicleId: number;
+  actionType: 'pickup' | 'dropoff' | 'wait';
+  requestId: number | null;
+  pickupCandidateRequestIds: number[];
 }
 
 export interface SimulationReplayPayload {
-  version: 1;
+  version: 4;
   generatedAt: string;
   runName: string;
   config: SimulationConfigPayload;
   frames: SimulationState[];
-}
-
-export type SimulationCommandType = 'start' | 'stop' | 'reset' | 'setSpeed' | 'setScenario';
-
-export interface SimulationCommand {
-  type: SimulationCommandType;
-  payload?: number | DemandScenario;
-}
-
-export interface SimulationConfig {
-  speed: number;
-  demandRate: number;
+  passengerEvents: ReplayPassengerEvent[];
+  distanceUnit: 'network_distance_unit';
+  vehicleMovements: ReplayVehicleMovement[];
+  dispatchDecisions: ReplayDispatchDecision[];
 }
 
 export interface WaitTimeBarDatum {
@@ -145,13 +217,6 @@ export interface DetourFactorDatum {
   actualTravelTime: number;
   directTravelTime: number;
   deliveryTime: number;
-}
-
-export interface EfficiencyDatum {
-  time: number;
-  idlePct: number;
-  pickupPct: number;
-  carryingPct: number;
 }
 
 export interface VehicleTimelineDatum {
@@ -183,12 +248,6 @@ export interface EdgeTraversal {
   count: number;
 }
 
-export interface NodeActivity {
-  nodeId: number;
-  pickupCount: number;
-  dropoffCount: number;
-}
-
 export interface VehicleAnalysisSummary {
   totalDistance: number;
   totalTrips: number;
@@ -211,13 +270,10 @@ export interface VehicleAnalysis {
   replayVehicles: Vehicle[];
   replayPassengers: Passenger[];
   assignedPassengers: Passenger[];
-  routeEdges: [number, number][];
   edgeTraversals: EdgeTraversal[];
-  nodeActivity: NodeActivity[];
   summary: VehicleAnalysisSummary;
   waitTimeData: WaitTimeBarDatum[];
   detourFactorData: DetourFactorDatum[];
-  efficiencyData: EfficiencyDatum[];
   timelineData: VehicleTimelineDatum[];
   passengerLoadData: VehiclePassengerLoadDatum[];
 }

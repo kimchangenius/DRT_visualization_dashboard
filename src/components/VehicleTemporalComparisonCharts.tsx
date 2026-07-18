@@ -1,19 +1,33 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 
 import {
   RESULT_A_COLOR,
   RESULT_B_COLOR,
 } from '../config';
-import type { Passenger, SimulationState, Vehicle, VehiclePassengerLoadDatum, VehiclePatternSelection, VehicleStatus } from '../types/simulation';
+import type {
+  ReplayDispatchDecision,
+  ReplayPassengerEvent,
+  SimulationState,
+  VehiclePassengerLoadDatum,
+  VehiclePatternSelection,
+  VehicleStatus,
+} from '../types/simulation';
 import { useNonPassiveWheel } from '../hooks/useNonPassiveWheel';
 import type { NonPassiveWheelEvent } from '../hooks/useNonPassiveWheel';
 import { clampDomain, zoomDomain as calculateZoomDomain } from '../utils/domain';
 import type { NumericDomain } from '../utils/domain';
 import { frameAtOrBefore } from '../utils/replay';
+import {
+  buildVehiclePassengerLoadData,
+  buildVehicleTimelineData,
+  inferVehicleTimelineStatus,
+  passengerUnitCount,
+} from '../utils/vehicleTemporal';
 
-interface ReplayVehicleSource {
+export interface ReplayVehicleSource {
   frames: SimulationState[];
+  passengerEvents?: ReplayPassengerEvent[];
 }
 
 interface VehicleTemporalComparisonChartsProps {
@@ -21,6 +35,7 @@ interface VehicleTemporalComparisonChartsProps {
   resultB: ReplayVehicleSource | null;
   currentTimes: Record<'left' | 'right', number>;
   selectedSegments: Record<'left' | 'right', VehiclePatternSelection | null>;
+  contextIntervals?: Record<'left' | 'right', NumericDomain | null>;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
 }
 
@@ -35,6 +50,14 @@ interface PassengerEventDatum {
   time: number;
   pickupPassengers: number;
   dropoffPassengers: number;
+  events: PassengerSequenceEvent[];
+}
+
+interface PassengerSequenceEvent {
+  key: string;
+  type: 'pickup' | 'dropoff';
+  passengerId: number;
+  passengerCount: number;
 }
 
 type TimelineDomain = NumericDomain;
@@ -42,6 +65,7 @@ type TimelineWheelEvent = NonPassiveWheelEvent<HTMLDivElement>;
 type TimelineInteractionMode = 'pan' | 'select';
 
 const DEFAULT_VEHICLE_IDS = [1, 2, 3, 4];
+const CONTEXT_INTERVAL_ZOOM_FACTOR = 1.4;
 
 const STATUS_META: Record<VehicleStatus, { label: string; color: string }> = {
   idle: { label: 'Idle', color: 'transparent' },
@@ -66,161 +90,52 @@ function vehicleIdsForSources(
   return Array.from(ids).sort((a, b) => a - b);
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function passengerUnitCount(passenger: Passenger): number {
-  return isFiniteNumber(passenger.numPassengers) && passenger.numPassengers > 0
-    ? passenger.numPassengers
-    : 1;
-}
-
-function onboardPassengersForVehicle(frame: SimulationState, vehicleId: number): Passenger[] {
-  const time = frame.metrics.currentTime;
-  return frame.passengers.filter(passenger => {
-    if (passenger.assignedVehicleId !== vehicleId) return false;
-    if (passenger.status === 'cancelled') return false;
-    if (passenger.pickupTime == null || passenger.pickupTime > time) return false;
-    if (passenger.deliveryTime != null && passenger.deliveryTime <= time) return false;
-    return true;
-  });
-}
-
-function vehicleOnboardPassengerCount(
-  vehicle: Vehicle | undefined,
-  onboardPassengers: Passenger[],
-): number {
-  if (isFiniteNumber(vehicle?.numPassengers)) {
-    return Math.max(0, vehicle.numPassengers);
-  }
-
-  return onboardPassengers.reduce((count, passenger) => count + passengerUnitCount(passenger), 0);
-}
-
-function onboardPassengerLabels(passengers: Passenger[]): string[] {
-  return passengers.map(passenger => {
-    const count = passengerUnitCount(passenger);
-    return count > 1 ? 'P' + passenger.id + ' x' + count : 'P' + passenger.id;
-  });
-}
-
-function onboardPassengerSignature(passengers: Passenger[]): string {
-  return passengers
-    .map(passenger => passenger.id + ':' + passengerUnitCount(passenger))
-    .sort()
-    .join('|');
-}
-
-function buildPassengerLoadData(
-  source: ReplayVehicleSource | null,
-  vehicleId: number,
-): VehiclePassengerLoadDatum[] {
-  const frames = source?.frames ?? [];
-  const data: VehiclePassengerLoadDatum[] = [];
-  let prevTime = -1;
-
-  for (const frame of frames) {
-    const time = frame.metrics.currentTime;
-    if (time === prevTime) continue;
-    prevTime = time;
-    const vehicle = frame.vehicles.find(v => v.id === vehicleId);
-    if (!vehicle) continue;
-    const onboardPassengers = onboardPassengersForVehicle(frame, vehicleId);
-    data.push({
-      time,
-      onboardPassengers: vehicleOnboardPassengerCount(vehicle, onboardPassengers),
-      onboardPassengerIds: onboardPassengers.map(passenger => passenger.id),
-      onboardPassengerLabels: onboardPassengerLabels(onboardPassengers),
-    });
-  }
-
-  return data;
-}
-
 function buildPassengerEventData(
   source: ReplayVehicleSource | null,
   vehicleId: number,
-  passengerLoadData: VehiclePassengerLoadDatum[],
 ): PassengerEventDatum[] {
-  const passengersById = new Map<number, Passenger>();
-  for (const frame of source?.frames ?? []) {
-    for (const passenger of frame.passengers) {
-      if (passenger.assignedVehicleId === vehicleId) passengersById.set(passenger.id, passenger);
-    }
-  }
-
   const eventsByTime = new Map<number, PassengerEventDatum>();
   const eventAt = (time: number) => {
     const existing = eventsByTime.get(time);
     if (existing) return existing;
-    const event = { time, pickupPassengers: 0, dropoffPassengers: 0 };
+    const event: PassengerEventDatum = {
+      time,
+      pickupPassengers: 0,
+      dropoffPassengers: 0,
+      events: [],
+    };
     eventsByTime.set(time, event);
     return event;
   };
 
-  for (const passenger of passengersById.values()) {
-    const units = passengerUnitCount(passenger);
-    if (passenger.pickupTime != null) eventAt(passenger.pickupTime).pickupPassengers += units;
-    if (passenger.deliveryTime != null) eventAt(passenger.deliveryTime).dropoffPassengers += units;
-  }
-
-  // Vehicle load is the line chart's authoritative value. Reconcile each frame
-  // interval so older or partial replays cannot show a load change without its bar.
-  for (let index = 1; index < passengerLoadData.length; index += 1) {
-    const previous = passengerLoadData[index - 1];
-    const current = passengerLoadData[index];
-    const observedDelta = current.onboardPassengers - previous.onboardPassengers;
-    let encodedDelta = 0;
-
-    for (const event of eventsByTime.values()) {
-      if (event.time > previous.time && event.time <= current.time) {
-        encodedDelta += event.pickupPassengers - event.dropoffPassengers;
-      }
+  for (const encodedEvent of source?.passengerEvents ?? []) {
+    if (encodedEvent.vehicleId !== vehicleId) continue;
+    const event = eventAt(encodedEvent.time);
+    if (encodedEvent.type === 'pickup') {
+      event.pickupPassengers += encodedEvent.passengerCount;
+    } else {
+      event.dropoffPassengers += encodedEvent.passengerCount;
     }
-
-    const missingDelta = observedDelta - encodedDelta;
-    if (missingDelta > 0) {
-      eventAt(current.time).pickupPassengers += missingDelta;
-    } else if (missingDelta < 0) {
-      eventAt(current.time).dropoffPassengers += -missingDelta;
-    }
+    event.events.push({
+      key: `${encodedEvent.type}-${encodedEvent.passengerId}-${encodedEvent.time}`,
+      type: encodedEvent.type,
+      passengerId: encodedEvent.passengerId,
+      passengerCount: encodedEvent.passengerCount,
+    });
   }
 
   return [...eventsByTime.values()].sort((a, b) => a.time - b.time);
 }
 
-function inferVehicleTimelineStatus(
-  frame: SimulationState,
+function passengerEventGroupCount(
+  source: ReplayVehicleSource | null,
   vehicleId: number,
-  fallbackStatus: VehicleStatus,
-): VehicleStatus {
-  if (fallbackStatus !== 'idle' && fallbackStatus !== 'repositioning') {
-    return fallbackStatus;
-  }
-
-  const time = frame.metrics.currentTime;
-  const assignedPassengers = frame.passengers.filter(
-    passenger => passenger.assignedVehicleId === vehicleId,
-  );
-  const hasOnboardPassenger = assignedPassengers.some(
-    passenger =>
-      passenger.status !== 'cancelled' &&
-      passenger.pickupTime != null &&
-      passenger.pickupTime <= time &&
-      (passenger.deliveryTime == null || passenger.deliveryTime > time),
-  );
-  if (hasOnboardPassenger) return 'carrying';
-
-  const hasPickupTarget = assignedPassengers.some(
-    passenger =>
-      passenger.status === 'waiting' &&
-      passenger.requestTime <= time &&
-      (passenger.pickupTime == null || passenger.pickupTime > time),
-  );
-  if (hasPickupTarget) return 'picking_up';
-
-  return fallbackStatus;
+): number {
+  return new Set(
+    (source?.passengerEvents ?? [])
+      .filter(event => event.vehicleId === vehicleId)
+      .map(event => event.time),
+  ).size;
 }
 
 function statusAt(
@@ -238,56 +153,45 @@ function countServedPassengers(
   vehicleId: number,
 ): number | undefined {
   if (!frame) return undefined;
-  return frame.passengers.filter(
-    passenger =>
+  return frame.passengers.reduce(
+    (total, passenger) =>
       passenger.assignedVehicleId === vehicleId &&
-      passenger.status === 'delivered',
-  ).length;
-}
-
-function buildStatusSegments(
-  source: ReplayVehicleSource | null,
-  vehicleId: number,
-): StatusSegment[] {
-  const frames = source?.frames ?? [];
-  const segments: StatusSegment[] = [];
-  let active: StatusSegment | null = null;
-  let activePassengerSignature = '';
-
-  for (const frame of frames) {
-    const vehicle = frame.vehicles.find(v => v.id === vehicleId);
-    if (!vehicle) continue;
-
-    const t = frame.metrics.currentTime;
-    const status = inferVehicleTimelineStatus(frame, vehicleId, vehicle.status);
-    const passengerSignature = onboardPassengerSignature(onboardPassengersForVehicle(frame, vehicleId));
-    if (!active) {
-      activePassengerSignature = passengerSignature;
-      active = { startTime: t, endTime: t, status };
-      segments.push(active);
-    } else {
-      const hasPassengerEvent = activePassengerSignature !== passengerSignature;
-      if (active.status !== status || hasPassengerEvent) {
-        active.endTime = t;
-        active = { startTime: t, endTime: t, status, hasPassengerEvent };
-        activePassengerSignature = passengerSignature;
-        segments.push(active);
-      } else {
-        active.endTime = t;
-      }
-    }
-  }
-
-  if (active) {
-    const maxTime = frames[frames.length - 1]?.metrics.currentTime ?? active.endTime;
-    active.endTime = Math.max(active.endTime, maxTime, active.startTime + 1);
-  }
-
-  return segments;
+      passenger.status === 'delivered'
+        ? total + passengerUnitCount(passenger)
+        : total,
+    0,
+  );
 }
 
 function formatStatus(status: VehicleStatus | null): string {
   return status ? STATUS_META[status].label : '-';
+}
+
+function dispatchDecisionLabel(decision: ReplayDispatchDecision): string {
+  const actionLabel = decision.actionType === 'pickup'
+    ? 'Pickup'
+    : decision.actionType === 'dropoff'
+      ? 'Drop-off'
+      : 'Wait';
+  return decision.requestId == null
+    ? `${actionLabel} at t=${decision.time}`
+    : `${actionLabel} R${decision.requestId} at t=${decision.time}`;
+}
+
+function segmentMatchesDispatchDecision(
+  segment: StatusSegment,
+  decision: ReplayDispatchDecision,
+): boolean {
+  if (decision.actionType === 'wait') return false;
+  const expectedStatus = decision.actionType === 'pickup' ? 'picking_up' : 'carrying';
+  if (segment.status !== expectedStatus) return false;
+  return (
+    (segment.startTime <= decision.time && segment.endTime >= decision.time) ||
+    (
+      segment.startTime > decision.time &&
+      segment.startTime <= decision.time + 1
+    )
+  );
 }
 
 function passengerLoadStepPath(
@@ -502,44 +406,207 @@ function VehiclePatternPassengerLoadChart({
   );
 }
 
-function VehicleEventBar({
-  segments,
-  maxEventCount,
+function EventSequenceBar({
+  passengerEvents,
+  hasEncodedEvents,
+  maxEventGroupCount,
+  eventBoxWidth,
+  scrollLeft,
+  onScrollLeftChange,
+  onTrackTopChange,
   selectedInterval,
+  isDraftSelection,
+  selectedEventTime,
+  dispatchDecisionFocus,
+  onSelectEventTime,
 }: {
-  segments: StatusSegment[];
-  maxEventCount: number;
+  passengerEvents: PassengerEventDatum[];
+  hasEncodedEvents: boolean;
+  maxEventGroupCount: number;
+  eventBoxWidth: number;
+  scrollLeft: number;
+  onScrollLeftChange: (scrollLeft: number) => void;
+  onTrackTopChange: (top: number) => void;
   selectedInterval: [number, number] | null;
+  isDraftSelection: boolean;
+  selectedEventTime: number | null;
+  dispatchDecisionFocus: ReplayDispatchDecision | null;
+  onSelectEventTime: (time: number | null) => void;
 }) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  const visibleEvents = passengerEvents;
+  const maxStack = Math.max(1, ...visibleEvents.map(event => event.events.length));
+  const selectedEventIndices = selectedInterval == null
+    ? []
+    : visibleEvents.flatMap((event, index) => (
+      event.time >= selectedInterval[0] && event.time <= selectedInterval[1] ? [index] : []
+    ));
+  const selectedGridStart = selectedEventIndices.length > 0 ? selectedEventIndices[0] + 1 : null;
+  const selectedGridEnd = selectedEventIndices.length > 0
+    ? selectedEventIndices[selectedEventIndices.length - 1] + 2
+    : null;
+  const visibleEventTimeSignature = visibleEvents.map(event => event.time).join('|');
+  const focusedEventIndex = dispatchDecisionFocus?.requestId == null ||
+    dispatchDecisionFocus.actionType === 'wait'
+    ? -1
+    : visibleEvents.findIndex(eventGroup => eventGroup.events.some(event =>
+      event.passengerId === dispatchDecisionFocus.requestId &&
+      event.type === dispatchDecisionFocus.actionType
+    ));
   const eventGridStyle = {
-    gridTemplateColumns: `repeat(${maxEventCount}, minmax(0, 1fr))`,
+    gridTemplateColumns: `repeat(${Math.max(1, maxEventGroupCount)}, ${eventBoxWidth}px)`,
+    width: `${Math.max(1, maxEventGroupCount) * eventBoxWidth}px`,
   };
 
+  useEffect(() => {
+    const track = trackRef.current;
+    if (track && Math.abs(track.scrollLeft - scrollLeft) > 0.5) {
+      track.scrollLeft = scrollLeft;
+    }
+  }, [scrollLeft]);
+
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (!track || selectedInterval == null || visibleEvents.length === 0) return;
+
+    const alignToSelectedInterval = () => {
+      const intervalMidpoint = (selectedInterval[0] + selectedInterval[1]) / 2;
+      const nearestIndex = visibleEvents.reduce((nearest, event, index) => (
+        Math.abs(event.time - intervalMidpoint) <
+        Math.abs(visibleEvents[nearest].time - intervalMidpoint)
+          ? index
+          : nearest
+      ), 0);
+      const firstIndex = selectedEventIndices[0] ?? nearestIndex;
+      const lastIndex = selectedEventIndices[selectedEventIndices.length - 1] ?? nearestIndex;
+      const rangeLeft = firstIndex * eventBoxWidth;
+      const rangeRight = (lastIndex + 1) * eventBoxWidth;
+      const rangeWidth = rangeRight - rangeLeft;
+      const maxScrollLeft = Math.max(0, track.scrollWidth - track.clientWidth);
+      const targetScrollLeft = rangeWidth >= track.clientWidth
+        ? rangeLeft
+        : (rangeLeft + rangeRight - track.clientWidth) / 2;
+      const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, targetScrollLeft));
+
+      track.scrollLeft = nextScrollLeft;
+      onScrollLeftChange(nextScrollLeft);
+    };
+
+    alignToSelectedInterval();
+    const animationFrame = window.requestAnimationFrame(alignToSelectedInterval);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [
+    dispatchDecisionFocus?.decisionRound,
+    dispatchDecisionFocus?.time,
+    dispatchDecisionFocus?.vehicleId,
+    eventBoxWidth,
+    isDraftSelection,
+    onScrollLeftChange,
+    selectedInterval?.[0],
+    selectedInterval?.[1],
+    visibleEventTimeSignature,
+  ]);
+
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (!track || focusedEventIndex < 0) return;
+    const eventCenter = (focusedEventIndex + 0.5) * eventBoxWidth;
+    const maxScrollLeft = Math.max(0, track.scrollWidth - track.clientWidth);
+    const nextScrollLeft = Math.max(
+      0,
+      Math.min(maxScrollLeft, eventCenter - track.clientWidth / 2),
+    );
+    track.scrollLeft = nextScrollLeft;
+    onScrollLeftChange(nextScrollLeft);
+  }, [
+    dispatchDecisionFocus?.actionType,
+    dispatchDecisionFocus?.decisionRound,
+    dispatchDecisionFocus?.requestId,
+    dispatchDecisionFocus?.time,
+    eventBoxWidth,
+    focusedEventIndex,
+    onScrollLeftChange,
+  ]);
+
+  useLayoutEffect(() => {
+    const updateTrackTop = () => {
+      if (trackRef.current) onTrackTopChange(trackRef.current.offsetTop);
+    };
+    updateTrackTop();
+    window.addEventListener('resize', updateTrackTop);
+    return () => window.removeEventListener('resize', updateTrackTop);
+  }, [maxStack, onTrackTopChange, visibleEvents.length]);
+
+  useNonPassiveWheel(trackRef, event => {
+    const track = trackRef.current;
+    if (!track || track.scrollWidth <= track.clientWidth) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    onScrollLeftChange(Math.max(0, Math.min(track.scrollWidth - track.clientWidth, track.scrollLeft + delta)));
+  });
+
   return (
-    <div className="vehicle-event-bar" aria-label={`${segments.length} vehicle status events`}>
-      {segments.length === 0 ? (
-        <div className="vehicle-event-bar-empty">No events</div>
+    <div className="vehicle-event-sequence" aria-label={`${visibleEvents.length} request event times`}>
+      <div className="vehicle-event-sequence-head">
+        <span>Event Sequence</span>
+        <span className="vehicle-event-sequence-legend">
+          <i className="is-pickup" /> Pickup
+          <i className="is-dropoff" /> Drop-off
+        </span>
+      </div>
+      {visibleEvents.length === 0 ? (
+        <div className="vehicle-event-sequence-empty">
+          {hasEncodedEvents ? 'No request events' : 'Replay has no encoded passenger events'}
+        </div>
       ) : (
-        <div className="vehicle-event-bar-viewport">
-          <div className="vehicle-event-bar-track">
-            <div className="vehicle-event-box-row" style={eventGridStyle}>
-              {segments.map((segment, index) => {
-                const meta = STATUS_META[segment.status];
-                const overlapsSelection = selectedInterval != null &&
-                  segment.endTime > selectedInterval[0] &&
-                  segment.startTime < selectedInterval[1];
-                return (
+        <div
+          ref={trackRef}
+          className="vehicle-event-sequence-track"
+          style={{ height: `${Math.min(maxStack, 4) * 20 + 6}px` }}
+          onScroll={event => onScrollLeftChange(event.currentTarget.scrollLeft)}
+        >
+          <div className="vehicle-event-sequence-grid" style={eventGridStyle}>
+            {selectedGridStart != null && selectedGridEnd != null ? (
+              <span
+                className="vehicle-event-sequence-selected-range"
+                style={{ gridColumn: `${selectedGridStart} / ${selectedGridEnd}` }}
+                aria-hidden="true"
+              />
+            ) : null}
+            {visibleEvents.map((eventGroup, eventIndex) => {
+              const inSelection = selectedInterval != null &&
+                eventGroup.time >= selectedInterval[0] &&
+                eventGroup.time <= selectedInterval[1];
+              const isSelected = selectedEventTime === eventGroup.time;
+              return (
                 <div
-                  key={`${segment.startTime}-${segment.status}-${index}`}
-                  className={`vehicle-event-box is-${segment.status}${overlapsSelection ? ' is-selected-interval' : ''}`}
-                  style={{ background: meta.color }}
-                  title={`${meta.label}: t=${segment.startTime}-${segment.endTime}`}
+                  key={`event-group-${eventGroup.time}`}
+                  className={`vehicle-event-sequence-group${inSelection ? ' is-selected-interval' : ''}${isSelected ? ' is-selected' : ''}`}
+                  style={{ gridColumn: eventIndex + 1 }}
                 >
-                  <span>{meta.label}</span>
+                  {eventGroup.events.map(event => {
+                    const passengerLabel = `P${event.passengerId}`;
+                    const eventLabel = event.type === 'pickup' ? 'Pickup' : 'Drop-off';
+                    const isDecisionFocus =
+                      dispatchDecisionFocus?.requestId === event.passengerId &&
+                      dispatchDecisionFocus.actionType === event.type;
+                    return (
+                      <button
+                        key={event.key}
+                        type="button"
+                        className={`vehicle-event-sequence-box is-${event.type}${isDecisionFocus ? ' is-decision-focus' : ''}`}
+                        aria-pressed={isSelected}
+                      title={`${eventLabel} ${passengerLabel}${event.passengerCount > 1 ? ` (${event.passengerCount} passengers)` : ''} at t=${eventGroup.time}`}
+                      onClick={() => onSelectEventTime(isSelected ? null : eventGroup.time)}
+                    >
+                        <span>{event.passengerId}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                );
-              })}
-            </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -557,10 +624,18 @@ function StatusTimelineRow({
   resultLabel,
   vehicleId,
   selectedSegment,
+  contextInterval,
   draftInterval,
   passengerLoadData,
   passengerEventData,
-  maxEventCount,
+  hasEncodedEvents,
+  maxEventGroupCount,
+  eventBoxWidth,
+  eventSequenceScrollLeft,
+  onEventSequenceScrollLeftChange,
+  selectedEventTime,
+  dispatchDecisionFocus,
+  onSelectEventTime,
   onSelectSegment,
   onWheel,
   onMouseDown,
@@ -576,10 +651,18 @@ function StatusTimelineRow({
   resultLabel: string;
   vehicleId: number;
   selectedSegment: VehiclePatternSelection | null;
+  contextInterval: TimelineDomain | null;
   draftInterval: [number, number] | null;
   passengerLoadData: VehiclePassengerLoadDatum[];
   passengerEventData: PassengerEventDatum[];
-  maxEventCount: number;
+  hasEncodedEvents: boolean;
+  maxEventGroupCount: number;
+  eventBoxWidth: number;
+  eventSequenceScrollLeft: number;
+  onEventSequenceScrollLeftChange: (scrollLeft: number) => void;
+  selectedEventTime: number | null;
+  dispatchDecisionFocus: ReplayDispatchDecision | null;
+  onSelectEventTime: (time: number | null) => void;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
   onWheel: (event: TimelineWheelEvent) => void;
   onMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
@@ -587,19 +670,63 @@ function StatusTimelineRow({
   onMouseUp: (event: MouseEvent<HTMLDivElement>) => void;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
+  const axisRef = useRef<HTMLDivElement | null>(null);
+  const [eventSequenceTrackTop, setEventSequenceTrackTop] = useState(0);
+  const [axisCenterY, setAxisCenterY] = useState(0);
   const [domainStart, domainEnd] = domain;
   const duration = Math.max(1, domainEnd - domainStart);
   const currentTimePct = Math.min(100, Math.max(0, ((currentTime - domainStart) / duration) * 100));
   const showCurrentTimeTick = currentTime >= domainStart && currentTime <= domainEnd;
-  const selectedInterval: [number, number] | null = draftInterval ?? (
+  const selectedInterval: [number, number] | null = draftInterval ?? contextInterval ?? (
     selectedSegment?.vehicleId === vehicleId
       ? [selectedSegment.startTime, selectedSegment.endTime]
       : null
   );
   const selectedRangeStart = selectedInterval == null ? null : Math.max(domainStart, selectedInterval[0]);
   const selectedRangeEnd = selectedInterval == null ? null : Math.min(domainEnd, selectedInterval[1]);
+  const selectedEventRawPct = selectedEventTime == null
+    ? null
+    : ((selectedEventTime - domainStart) / duration) * 100;
+  const selectedEventPct = selectedEventRawPct == null
+    ? null
+    : Math.min(100, Math.max(0, selectedEventRawPct));
+  const visibleEventGroups = passengerEventData;
+  const selectedEventIndex = selectedEventTime == null
+    ? -1
+    : visibleEventGroups.findIndex(event => event.time === selectedEventTime);
+  const showSelectedEvent = selectedEventPct != null && selectedEventIndex >= 0;
+  const selectedSequencePct = selectedEventIndex < 0
+    ? null
+    : ((selectedEventIndex + 0.5) / Math.max(1, maxEventGroupCount)) * 100;
+  const selectedSequenceXPx = selectedEventIndex < 0
+    ? null
+    : (selectedEventIndex + 0.5) * eventBoxWidth - eventSequenceScrollLeft;
+  const connectorBendY = axisCenterY > 0
+    ? axisCenterY
+    : Math.max(0, eventSequenceTrackTop - 10);
+  const decisionTimePct = dispatchDecisionFocus == null
+    ? null
+    : ((dispatchDecisionFocus.time - domainStart) / duration) * 100;
+  const showDecisionTime = decisionTimePct != null &&
+    decisionTimePct >= 0 &&
+    decisionTimePct <= 100;
 
   useNonPassiveWheel(trackRef, onWheel);
+
+  useLayoutEffect(() => {
+    const updateAxisCenter = () => {
+      const axis = axisRef.current;
+      if (!axis) return;
+      const nextAxisCenter = axis.offsetTop + axis.clientHeight / 2;
+      setAxisCenterY(previous => (
+        Math.abs(previous - nextAxisCenter) > 0.5 ? nextAxisCenter : previous
+      ));
+    };
+
+    updateAxisCenter();
+    window.addEventListener('resize', updateAxisCenter);
+    return () => window.removeEventListener('resize', updateAxisCenter);
+  }, [eventSequenceTrackTop, passengerLoadData.length]);
 
   const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -626,6 +753,25 @@ function StatusTimelineRow({
 
   return (
     <div className="vehicle-pattern-timeline-row">
+      {showSelectedEvent && eventSequenceTrackTop > 0 ? (
+        <svg
+          className="vehicle-pattern-event-connector"
+          aria-hidden="true"
+        >
+          <line
+            x1={`${selectedEventPct}%`}
+            y1="0"
+            x2={`${selectedEventPct}%`}
+            y2={`${connectorBendY}px`}
+          />
+          <line
+            x1={`${selectedEventPct}%`}
+            y1={`${connectorBendY}px`}
+            x2={selectedSequenceXPx == null ? `${selectedSequencePct ?? selectedEventPct}%` : `${selectedSequenceXPx}px`}
+            y2={`${eventSequenceTrackTop}px`}
+          />
+        </svg>
+      ) : null}
       <div
         ref={trackRef}
         className={`vehicle-pattern-track is-${interactionMode}${isPanning ? ' panning' : ''}`}
@@ -666,12 +812,14 @@ function StatusTimelineRow({
               selectedSegment.startTime === segment.startTime &&
               selectedSegment.endTime === segment.endTime &&
               selectedSegment.status === segment.status;
+            const isDecisionAction = dispatchDecisionFocus != null &&
+              segmentMatchesDispatchDecision(segment, dispatchDecisionFocus);
 
             return (
               <button
                 key={`${resultLabel}-${segment.startTime}-${segment.status}-${index}`}
                 type="button"
-                className={`vehicle-pattern-segment${clickable ? ' clickable' : ''}${selected ? ' selected' : ''}${segment.hasPassengerEvent ? ' has-passenger-event' : ''}`}
+                className={`vehicle-pattern-segment${clickable ? ' clickable' : ''}${selected ? ' selected' : ''}${segment.hasPassengerEvent ? ' has-passenger-event' : ''}${isDecisionAction ? ' is-decision-action' : ''}`}
                 style={{
                   left: `${clampedLeft}%`,
                   width: `${Math.min(width, 100 - clampedLeft)}%`,
@@ -695,10 +843,17 @@ function StatusTimelineRow({
             );
           })
         )}
-        {showCurrentTimeTick ? (
+        {showCurrentTimeTick && dispatchDecisionFocus == null ? (
           <span
             className="vehicle-pattern-current-time-tick"
             style={{ left: currentTimePct + '%' }}
+            aria-hidden="true"
+          />
+        ) : null}
+        {showDecisionTime ? (
+          <span
+            className="vehicle-pattern-decision-time-line"
+            style={{ left: `${decisionTimePct}%` }}
             aria-hidden="true"
           />
         ) : null}
@@ -717,7 +872,7 @@ function StatusTimelineRow({
           onInteractionMouseUp={handleMouseUp}
         />
       ) : null}
-      <div className="vehicle-pattern-axis">
+      <div ref={axisRef} className="vehicle-pattern-axis">
         <span>t={Math.round(domainStart)}</span>
         {showCurrentTimeTick ? (
           <span
@@ -729,10 +884,19 @@ function StatusTimelineRow({
         ) : null}
         <span>t={Math.round(domainEnd)}</span>
       </div>
-      <VehicleEventBar
-        segments={segments}
-        maxEventCount={maxEventCount}
+      <EventSequenceBar
+        passengerEvents={passengerEventData}
+        hasEncodedEvents={hasEncodedEvents}
+        maxEventGroupCount={maxEventGroupCount}
+        eventBoxWidth={eventBoxWidth}
+        scrollLeft={eventSequenceScrollLeft}
+        onScrollLeftChange={onEventSequenceScrollLeftChange}
+        onTrackTopChange={setEventSequenceTrackTop}
         selectedInterval={selectedInterval}
+        isDraftSelection={draftInterval != null}
+        selectedEventTime={selectedEventTime}
+        dispatchDecisionFocus={dispatchDecisionFocus}
+        onSelectEventTime={onSelectEventTime}
       />
     </div>
   );
@@ -746,8 +910,11 @@ function VehiclePatternRow({
   source,
   currentTime,
   selectedSegment,
+  contextInterval,
   interactionMode,
-  maxEventCount,
+  maxEventGroupCount,
+  eventBoxWidth,
+  dispatchDecisionFocus,
   onSelectSegment,
 }: {
   vehicleId: number;
@@ -757,8 +924,11 @@ function VehiclePatternRow({
   source: ReplayVehicleSource | null;
   currentTime: number;
   selectedSegment: VehiclePatternSelection | null;
+  contextInterval: TimelineDomain | null;
   interactionMode: TimelineInteractionMode;
-  maxEventCount: number;
+  maxEventGroupCount: number;
+  eventBoxWidth: number;
+  dispatchDecisionFocus: ReplayDispatchDecision | null;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
 }) {
   const minTime = source?.frames[0]?.metrics.currentTime ?? currentTime;
@@ -768,21 +938,51 @@ function VehiclePatternRow({
   const [zoomDomain, setZoomDomain] = useState<TimelineDomain | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const [draftInterval, setDraftInterval] = useState<[number, number] | null>(null);
+  const [selectedEventTime, setSelectedEventTime] = useState<number | null>(null);
+  const [eventSequenceScrollLeft, setEventSequenceScrollLeft] = useState(0);
   const panStartRef = useRef<{ x: number; domain: TimelineDomain } | null>(null);
   const selectionStartRef = useRef<number | null>(null);
-  const frame = source ? frameAtOrBefore(source.frames, currentTime) : null;
-  const status = statusAt(source, vehicleId, currentTime);
-  const segments = buildStatusSegments(source, vehicleId);
-  const passengerLoadData = buildPassengerLoadData(source, vehicleId);
-  const passengerEventData = buildPassengerEventData(source, vehicleId, passengerLoadData);
+  const frame = useMemo(
+    () => source ? frameAtOrBefore(source.frames, currentTime) : null,
+    [currentTime, source],
+  );
+  const status = useMemo(
+    () => statusAt(source, vehicleId, currentTime),
+    [currentTime, source, vehicleId],
+  );
+  const segments = useMemo(
+    () => buildVehicleTimelineData(source?.frames ?? [], vehicleId),
+    [source, vehicleId],
+  );
+  const passengerLoadData = useMemo(
+    () => buildVehiclePassengerLoadData(
+      source?.frames ?? [],
+      vehicleId,
+      source?.passengerEvents,
+    ),
+    [source, vehicleId],
+  );
+  const passengerEventData = useMemo(
+    () => buildPassengerEventData(source, vehicleId),
+    [source, vehicleId],
+  );
   const canInteract = segments.length > 0 && fullDomain[1] > fullDomain[0];
   const activeDomain = clampDomain(zoomDomain ?? fullDomain, fullDomain);
-  const replayFrameTimes = Array.from(new Set(
-    (source?.frames ?? []).map(sourceFrame => sourceFrame.metrics.currentTime),
-  )).sort((a, b) => a - b);
-  const selectableFrameTimes = replayFrameTimes.filter(
-    time => time >= activeDomain[0] && time <= activeDomain[1],
+  const replayFrameTimes = useMemo(
+    () => Array.from(new Set(
+      (source?.frames ?? []).map(sourceFrame => sourceFrame.metrics.currentTime),
+    )).sort((a, b) => a - b),
+    [source],
   );
+  const selectableFrameTimes = useMemo(
+    () => replayFrameTimes.filter(
+      time => time >= activeDomain[0] && time <= activeDomain[1],
+    ),
+    [activeDomain[0], activeDomain[1], replayFrameTimes],
+  );
+  const activeDispatchDecision = dispatchDecisionFocus?.vehicleId === vehicleId
+    ? dispatchDecisionFocus
+    : null;
 
   useEffect(() => {
     selectionStartRef.current = null;
@@ -790,6 +990,30 @@ function VehiclePatternRow({
     setIsPanning(false);
     panStartRef.current = null;
   }, [interactionMode]);
+
+  useEffect(() => {
+    setSelectedEventTime(null);
+    setEventSequenceScrollLeft(0);
+  }, [source, vehicleId]);
+
+  useEffect(() => {
+    if (contextInterval == null) {
+      setZoomDomain(null);
+      return;
+    }
+    setZoomDomain(calculateZoomDomain(
+      contextInterval,
+      fullDomain,
+      CONTEXT_INTERVAL_ZOOM_FACTOR,
+      0.5,
+      0,
+    ));
+  }, [
+    contextInterval?.[0],
+    contextInterval?.[1],
+    fullDomain[0],
+    fullDomain[1],
+  ]);
 
   const timeAtPointer = (event: MouseEvent<HTMLDivElement>): number => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -894,7 +1118,10 @@ function VehiclePatternRow({
   };
 
   return (
-    <div className="vehicle-pattern-row">
+    <div
+      className={`vehicle-pattern-row${activeDispatchDecision ? ' is-decision-focus' : ''}`}
+      data-vehicle-id={vehicleId}
+    >
       <div className="vehicle-pattern-row-head">
         <span className="vehicle-pattern-vehicle-id">V{vehicleId}</span>
         <span className="vehicle-pattern-row-status">{formatStatus(status)}</span>
@@ -927,6 +1154,11 @@ function VehiclePatternRow({
         <span className="vehicle-pattern-row-served" style={{ color: resultColor }}>
           Served {countServedPassengers(frame, vehicleId) ?? '-'}
         </span>
+        {activeDispatchDecision ? (
+          <span className="vehicle-pattern-decision-label">
+            {dispatchDecisionLabel(activeDispatchDecision)}
+          </span>
+        ) : null}
       </div>
       <StatusTimelineRow
         segments={segments}
@@ -938,10 +1170,18 @@ function VehiclePatternRow({
         resultLabel={resultLabel}
         vehicleId={vehicleId}
         selectedSegment={selectedSegment}
+        contextInterval={contextInterval}
         draftInterval={draftInterval}
         passengerLoadData={passengerLoadData}
         passengerEventData={passengerEventData}
-        maxEventCount={maxEventCount}
+        hasEncodedEvents={source?.passengerEvents != null}
+        maxEventGroupCount={maxEventGroupCount}
+        eventBoxWidth={eventBoxWidth}
+        eventSequenceScrollLeft={eventSequenceScrollLeft}
+        onEventSequenceScrollLeftChange={setEventSequenceScrollLeft}
+        selectedEventTime={selectedEventTime}
+        dispatchDecisionFocus={activeDispatchDecision}
+        onSelectEventTime={setSelectedEventTime}
         onSelectSegment={onSelectSegment}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
@@ -960,7 +1200,9 @@ function ResultVehicleCard({
   vehicleIds,
   currentTime,
   selectedSegment,
-  maxEventCount,
+  contextInterval,
+  maxEventGroupCount,
+  dispatchDecisionFocus,
   onSelectSegment,
 }: {
   side: 'left' | 'right';
@@ -970,10 +1212,57 @@ function ResultVehicleCard({
   vehicleIds: number[];
   currentTime: number;
   selectedSegment: VehiclePatternSelection | null;
-  maxEventCount: number;
+  contextInterval: TimelineDomain | null;
+  maxEventGroupCount: number;
+  dispatchDecisionFocus: ReplayDispatchDecision | null;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
 }) {
   const [interactionMode, setInteractionMode] = useState<TimelineInteractionMode>('pan');
+  const rowListRef = useRef<HTMLDivElement | null>(null);
+  const focusReturnScrollTopRef = useRef<number | null>(null);
+  const previousDecisionFocusRef = useRef<ReplayDispatchDecision | null>(null);
+  const maxRequestIdDigits = useMemo(
+    () => Math.max(
+      1,
+      ...(source?.passengerEvents ?? []).map(event => String(event.passengerId).length),
+    ),
+    [source],
+  );
+  const eventBoxWidth = Math.max(36, Math.min(64, 18 + maxRequestIdDigits * 7));
+
+  useLayoutEffect(() => {
+    const rowList = rowListRef.current;
+    const previousFocus = previousDecisionFocusRef.current;
+    if (!rowList) return;
+
+    if (dispatchDecisionFocus) {
+      if (previousFocus == null) {
+        focusReturnScrollTopRef.current = rowList.scrollTop;
+      }
+      const row = rowList.querySelector<HTMLElement>(
+        `[data-vehicle-id="${dispatchDecisionFocus.vehicleId}"]`,
+      );
+      if (row) {
+        const listRect = rowList.getBoundingClientRect();
+        const rowRect = row.getBoundingClientRect();
+        const centeredTop = rowList.scrollTop +
+          rowRect.top - listRect.top -
+          Math.max(0, (rowList.clientHeight - rowRect.height) / 2);
+        rowList.scrollTo({
+          top: Math.max(0, centeredTop),
+          behavior: 'smooth',
+        });
+      }
+    } else if (previousFocus != null && focusReturnScrollTopRef.current != null) {
+      rowList.scrollTop = focusReturnScrollTopRef.current;
+      focusReturnScrollTopRef.current = null;
+    }
+    previousDecisionFocusRef.current = dispatchDecisionFocus;
+  }, [
+    dispatchDecisionFocus?.decisionRound,
+    dispatchDecisionFocus?.time,
+    dispatchDecisionFocus?.vehicleId,
+  ]);
 
   return (
     <article className="panel vehicle-pattern-result-card">
@@ -1016,7 +1305,7 @@ function ResultVehicleCard({
           <span className="vehicle-pattern-result-count">{source ? `${vehicleIds.length} vehicles` : 'No file'}</span>
         </div>
       </div>
-      <div className="vehicle-pattern-row-list">
+      <div ref={rowListRef} className="vehicle-pattern-row-list">
         {vehicleIds.map(vehicleId => (
           <VehiclePatternRow
             key={`${title}-${vehicleId}`}
@@ -1027,8 +1316,11 @@ function ResultVehicleCard({
             source={source}
             currentTime={currentTime}
             selectedSegment={selectedSegment}
+            contextInterval={contextInterval}
             interactionMode={interactionMode}
-            maxEventCount={maxEventCount}
+            maxEventGroupCount={maxEventGroupCount}
+            eventBoxWidth={eventBoxWidth}
+            dispatchDecisionFocus={dispatchDecisionFocus}
             onSelectSegment={onSelectSegment}
           />
         ))}
@@ -1037,21 +1329,71 @@ function ResultVehicleCard({
   );
 }
 
+export function ResultVehiclePatterns({
+  source,
+  vehicleIds,
+  currentTime,
+  selectedSegment,
+  contextInterval = null,
+  dispatchDecisionFocus = null,
+  onSelectSegment,
+}: {
+  source: ReplayVehicleSource | null;
+  vehicleIds: number[];
+  currentTime: number;
+  selectedSegment: VehiclePatternSelection | null;
+  contextInterval?: TimelineDomain | null;
+  dispatchDecisionFocus?: ReplayDispatchDecision | null;
+  onSelectSegment: (selection: VehiclePatternSelection) => void;
+}) {
+  const maxEventGroupCount = useMemo(
+    () => Math.max(
+      1,
+      ...vehicleIds.map(vehicleId => passengerEventGroupCount(source, vehicleId)),
+    ),
+    [source, vehicleIds],
+  );
+
+  return (
+    <section className="vehicle-pattern-section result-analysis-pattern-section">
+      <ResultVehicleCard
+        side="left"
+        title="Vehicle Pattern"
+        color={RESULT_A_COLOR}
+        source={source}
+        vehicleIds={vehicleIds}
+        currentTime={currentTime}
+        selectedSegment={selectedSegment}
+        contextInterval={contextInterval}
+        dispatchDecisionFocus={dispatchDecisionFocus}
+        maxEventGroupCount={maxEventGroupCount}
+        onSelectSegment={onSelectSegment}
+      />
+    </section>
+  );
+}
+
 export default function VehicleTemporalComparisonCharts({
   resultA,
   resultB,
   currentTimes,
   selectedSegments,
+  contextIntervals = { left: null, right: null },
   onSelectSegment,
 }: VehicleTemporalComparisonChartsProps) {
-  const vehicleIds = vehicleIdsForSources(resultA, resultB);
-  const maxEventCount = Math.max(
-    1,
-    ...[resultA, resultB].flatMap(source =>
-      vehicleIds.map(vehicleId => buildStatusSegments(source, vehicleId).length),
-    ),
+  const vehicleIds = useMemo(
+    () => vehicleIdsForSources(resultA, resultB),
+    [resultA, resultB],
   );
-
+  const maxEventGroupCount = useMemo(
+    () => Math.max(
+      1,
+      ...[resultA, resultB].flatMap(source =>
+        vehicleIds.map(vehicleId => passengerEventGroupCount(source, vehicleId)),
+      ),
+    ),
+    [resultA, resultB, vehicleIds],
+  );
   if (vehicleIds.length === 0) {
     return (
       <section className="vehicle-pattern-section">
@@ -1074,7 +1416,9 @@ export default function VehicleTemporalComparisonCharts({
           vehicleIds={vehicleIds}
           currentTime={currentTimes.left}
           selectedSegment={selectedSegments.left}
-          maxEventCount={maxEventCount}
+          contextInterval={contextIntervals.left}
+          dispatchDecisionFocus={null}
+          maxEventGroupCount={maxEventGroupCount}
           onSelectSegment={onSelectSegment}
         />
         <ResultVehicleCard
@@ -1085,7 +1429,9 @@ export default function VehicleTemporalComparisonCharts({
           vehicleIds={vehicleIds}
           currentTime={currentTimes.right}
           selectedSegment={selectedSegments.right}
-          maxEventCount={maxEventCount}
+          contextInterval={contextIntervals.right}
+          dispatchDecisionFocus={null}
+          maxEventGroupCount={maxEventGroupCount}
           onSelectSegment={onSelectSegment}
         />
       </div>

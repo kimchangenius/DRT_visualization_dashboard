@@ -8,3 +8,7 @@ export function formatNumber(value: number | undefined, digits = 1): string {
   if (value == null || !Number.isFinite(value)) return '-';
   return Number.isInteger(value) ? String(value) : value.toFixed(digits);
 }
+
+export function formatOptionalTime(time: number | null): string {
+  return time == null ? '\u2014' : String(time);
+}

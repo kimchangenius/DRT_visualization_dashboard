@@ -1,20 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DemandScenario, Vehicle, Passenger, VehicleAnalysisSummary } from '../types/simulation';
 import { formatSimTime } from '../utils/time';
+import { passengerUnitCount } from '../utils/vehicleTemporal';
 
 interface SimulationControlsProps {
   isRunning: boolean;
+  canStart: boolean;
   maxNumVehicles: number;
   vehCapacity: number;
-  maxNumRequest: number;
   maxWaitTime: number;
   hiddenDim: number;
   batchSize: number;
   learningRate: number;
   selectedScenario: DemandScenario;
   availableScenarios: DemandScenario[];
-  scenarioSeed: number;
-  modelWeightFile: string | null;
   scenarioSelectionLocked: boolean;
   onScenarioChange: (scenario: DemandScenario) => void;
   onStart: () => void;
@@ -95,7 +94,7 @@ function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passenge
   const targetLabel = vehicle.targetNodeId != null ? `N${vehicle.targetNodeId}` : '-';
   const activeLoad = passengers.filter(
     p => p.assignedVehicleId === vehicle.id && p.status === 'picked_up',
-  ).length;
+  ).reduce((total, passenger) => total + passengerUnitCount(passenger), 0);
 
   return (
     <div className={`control-vehicle-status-card status-${vehicle.status}`}>
@@ -175,6 +174,7 @@ const SCENARIO_TOOLTIP_DURATION_MS = 5000;
 
 export default function SimulationControls({
   isRunning,
+  canStart,
   maxNumVehicles,
   vehCapacity,
   maxWaitTime,
@@ -183,8 +183,6 @@ export default function SimulationControls({
   learningRate,
   selectedScenario,
   availableScenarios,
-  scenarioSeed,
-  modelWeightFile,
   scenarioSelectionLocked,
   onScenarioChange,
   onStart,
@@ -274,7 +272,12 @@ export default function SimulationControls({
               ⏸ Pause
             </button>
           ) : (
-            <button type="button" className="btn btn-primary" onClick={onStart}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onStart}
+              disabled={!canStart}
+            >
               ▶ Start
             </button>
           )}

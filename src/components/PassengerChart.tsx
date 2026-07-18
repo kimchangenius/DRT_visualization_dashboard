@@ -1,6 +1,5 @@
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import type { PassengerTimeSeriesPoint } from '../types/simulation';
-import { CHART_ANIMATION_DURATION_MS } from '../config';
 
 interface PassengerChartProps {
   data: PassengerTimeSeriesPoint[];
@@ -51,9 +50,7 @@ export default function PassengerChart({ data, replayTime }: PassengerChartProps
               fillOpacity={1}
               fill="url(#servedGrad)"
               name="Served"
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-              animationEasing="ease-out"
+              isAnimationActive={false}
             />
             <Area
               type="monotone"
@@ -63,9 +60,7 @@ export default function PassengerChart({ data, replayTime }: PassengerChartProps
               fillOpacity={1}
               fill="url(#waitingGrad)"
               name="Waiting"
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-              animationEasing="ease-out"
+              isAnimationActive={false}
             />
             <Area
               type="monotone"
@@ -75,9 +70,7 @@ export default function PassengerChart({ data, replayTime }: PassengerChartProps
               fillOpacity={1}
               fill="url(#cancelledGrad)"
               name="Cancelled"
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-              animationEasing="ease-out"
+              isAnimationActive={false}
             />
           </AreaChart>
         </ResponsiveContainer>

@@ -1,6 +1,18 @@
-import { useMemo } from 'react';
-import { links, nodeMap, nodes } from '../data/siouxFallsNetwork';
-import type { Passenger } from '../types/simulation';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
+import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
+import type {
+  CancellationFeasibilityPoint,
+  Passenger,
+  ReplayDispatchDecision,
+} from '../types/simulation';
+
+export interface CancellationAnalysisContext {
+  requestId: number;
+  startTime: number;
+  endTime: number;
+}
 
 interface DemandNetworkMapProps {
   passengers: Passenger[];
@@ -10,6 +22,13 @@ interface DemandNetworkMapProps {
   title?: string;
   embedded?: boolean;
   hideTitle?: boolean;
+  showNodeLabels?: boolean;
+  appearance?: 'dashboard' | 'paper';
+  dispatchDecisions?: ReplayDispatchDecision[];
+  selectedDispatchDecision?: ReplayDispatchDecision | null;
+  onSelectCancellationContext?: (context: CancellationAnalysisContext) => void;
+  onSelectDispatchDecision?: (decision: ReplayDispatchDecision | null) => void;
+  onCloseCancellationContext?: () => void;
 }
 
 interface NodeDemand {
@@ -20,6 +39,19 @@ interface NodeDemand {
   pending: number;
 }
 
+interface DiagnosticsPosition {
+  x: number;
+  y: number;
+}
+
+interface DiagnosticsDragState {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startX: number;
+  startY: number;
+}
+
 const PADDING = 22;
 const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
@@ -27,6 +59,61 @@ const MAP_HEIGHT = 180;
 const ACCEPT_COLOR = '#004488';
 const PENDING_COLOR = '#ddaa33';
 const CANCELLED_COLOR = '#bb5566';
+const CANCELLATION_CATEGORY_META = {
+  deferred: {
+    label: 'Feasible but not selected',
+    legendLabel: 'Not selected',
+    color: '#66ccee',
+  },
+  infeasible: {
+    label: 'No feasible vehicle',
+    legendLabel: 'No feasible',
+    color: '#aa3377',
+  },
+} as const;
+// Okabe-Ito qualitative colors: unordered categories, color-vision-deficiency safe.
+const FEASIBILITY_STATUS_META = [
+  {
+    key: 'unavailableVehicleCount',
+    vehicleIdsKey: 'unavailableVehicleIds',
+    label: 'In service',
+    color: '#999999',
+  },
+  {
+    key: 'capacityBlockedVehicles',
+    vehicleIdsKey: 'capacityBlockedVehicleIds',
+    label: 'No seats',
+    color: '#cc79a7',
+  },
+  {
+    key: 'pickupDeadlineBlockedVehicles',
+    vehicleIdsKey: 'pickupDeadlineBlockedVehicleIds',
+    label: 'Late pickup',
+    color: '#e69f00',
+  },
+  {
+    key: 'serviceConstraintBlockedVehicles',
+    vehicleIdsKey: 'serviceConstraintBlockedVehicleIds',
+    label: 'Ride-time limit',
+    color: '#0072b2',
+  },
+  {
+    key: 'feasibleVehicleCount',
+    vehicleIdsKey: 'feasibleVehicleIds',
+    label: 'Assignable',
+    color: '#009e73',
+  },
+] as const;
+const DISPATCH_ACTION_META: Record<
+  ReplayDispatchDecision['actionType'],
+  { label: string; color: string }
+> = {
+  pickup: { label: 'Pickup', color: '#228833' },
+  dropoff: { label: 'Drop-off', color: '#cc6677' },
+  wait: { label: 'Wait', color: '#6b7280' },
+};
+
+type CancellationCategory = keyof typeof CANCELLATION_CATEGORY_META;
 
 function buildNodeDemand(passengers: Passenger[], replayTime: number): NodeDemand[] {
   const demandByNode = new Map<number, NodeDemand>();
@@ -79,6 +166,250 @@ function sectorPath(
   ].join(' ');
 }
 
+function cancellationCause(passenger: Passenger): string {
+  const diagnostics = passenger.cancellationDiagnostics;
+  if (passenger.cancellationReason === 'max_wait_after_assignment') {
+    return 'Pickup timeout after assignment';
+  }
+  if (passenger.cancellationReason !== 'max_wait_unassigned' || !diagnostics) {
+    return 'Reason not encoded';
+  }
+  if (diagnostics.feasibleButNotSelectedSteps > 0) {
+    return 'Feasible vehicle was not selected';
+  }
+  if (diagnostics.availableVehicleCount === 0) {
+    return 'No idle vehicle available';
+  }
+
+  const blockers: string[] = [];
+  if (diagnostics.capacityBlockedVehicles > 0) blockers.push('capacity');
+  if (diagnostics.pickupDeadlineBlockedVehicles > 0) blockers.push('pickup deadline');
+  if (diagnostics.serviceConstraintBlockedVehicles > 0) blockers.push('service constraint');
+  return blockers.length > 0
+    ? `No feasible vehicle (${blockers.join(', ')})`
+    : 'Wait limit exceeded';
+}
+
+function cancellationCategory(passenger: Passenger): CancellationCategory | null {
+  if (
+    passenger.cancellationReason === 'max_wait_unassigned' &&
+    (passenger.cancellationDiagnostics?.feasibleButNotSelectedSteps ?? 0) > 0
+  ) {
+    return 'deferred';
+  }
+  if (passenger.cancellationReason === 'max_wait_unassigned') return 'infeasible';
+  return null;
+}
+
+function sortedFeasibilityHistory(passenger: Passenger | null): CancellationFeasibilityPoint[] {
+  return [...(passenger?.feasibilityHistory ?? [])].sort((a, b) => a.time - b.time);
+}
+
+function vehicleIdsFromFeasibilityHistory(
+  history: CancellationFeasibilityPoint[],
+): number[] {
+  return [...new Set(history.flatMap(point =>
+    FEASIBILITY_STATUS_META.flatMap(meta => point[meta.vehicleIdsKey] ?? []),
+  ))].sort((a, b) => a - b);
+}
+
+function dispatchDecisionKey(decision: ReplayDispatchDecision): string {
+  return `${decision.time}:${decision.decisionRound}:${decision.vehicleId}`;
+}
+
+function observedChoicesForPassenger(
+  passenger: Passenger,
+  dispatchDecisions: ReplayDispatchDecision[],
+): ReplayDispatchDecision[] {
+  const cancellationTime = passenger.cancellationTime ?? passenger.requestTime;
+  return dispatchDecisions.filter(decision => {
+    if (
+      decision.time < passenger.requestTime ||
+      decision.time >= cancellationTime
+    ) {
+      return false;
+    }
+    return decision.pickupCandidateRequestIds.includes(passenger.id);
+  });
+}
+
+function CandidateAvailabilityTimeline({
+  passenger,
+  dispatchDecisions,
+  selectedDispatchDecision,
+  onSelectDispatchDecision,
+}: {
+  passenger: Passenger | null;
+  dispatchDecisions: ReplayDispatchDecision[];
+  selectedDispatchDecision: ReplayDispatchDecision | null;
+  onSelectDispatchDecision?: (decision: ReplayDispatchDecision | null) => void;
+}) {
+  if (!passenger) {
+    return <div className="demand-cancellation-visual-empty">Select a request.</div>;
+  }
+
+  const history = sortedFeasibilityHistory(passenger);
+  const hasVehicleIds = history.length > 0 && history.every(point =>
+    FEASIBILITY_STATUS_META.every(meta => Array.isArray(point[meta.vehicleIdsKey])),
+  );
+  const vehicleIds = hasVehicleIds ? vehicleIdsFromFeasibilityHistory(history) : [];
+  const startTime = passenger.requestTime;
+  const cancellationTime = passenger.cancellationTime ?? startTime;
+  const duration = Math.max(1, cancellationTime - startTime);
+  const assignmentTime = passenger.assignmentTime ?? null;
+  const candidateEndTime = assignmentTime ?? cancellationTime;
+  const observedChoices = observedChoicesForPassenger(
+    passenger,
+    dispatchDecisions,
+  );
+  const choicesByVehicle = new Map<number, ReplayDispatchDecision[]>();
+  for (const decision of observedChoices) {
+    const decisions = choicesByVehicle.get(decision.vehicleId) ?? [];
+    decisions.push(decision);
+    choicesByVehicle.set(decision.vehicleId, decisions);
+  }
+  const selectedDecisionKey = selectedDispatchDecision
+    ? dispatchDecisionKey(selectedDispatchDecision)
+    : null;
+  const observedActionTypes = (
+    Object.keys(DISPATCH_ACTION_META) as ReplayDispatchDecision['actionType'][]
+  ).filter(actionType =>
+    observedChoices.some(decision => decision.actionType === actionType),
+  );
+
+  return (
+    <section className="demand-cancellation-request-visual">
+      <div className="demand-cancellation-request-meta">
+        <strong>R{passenger.id}</strong>
+        <span>N{passenger.originNodeId} to N{passenger.destinationNodeId}</span>
+        <span>Wait {Math.max(0, cancellationTime - startTime)}</span>
+        <span>{cancellationCause(passenger)}</span>
+      </div>
+      <h4>Candidate Availability Timeline</h4>
+      {history.length > 0 && hasVehicleIds ? (
+        <div
+          className="demand-cancellation-vehicle-timeline"
+          aria-label={`Candidate vehicle status from t=${startTime} to t=${cancellationTime}`}
+        >
+          {vehicleIds.map(vehicleId => {
+            const vehicleChoices = choicesByVehicle.get(vehicleId) ?? [];
+            const stackCountByTime = new Map<number, number>();
+            const stackIndexByDecision = new Map<string, number>();
+            let maximumStack = 1;
+            for (const decision of vehicleChoices) {
+              const stackIndex = stackCountByTime.get(decision.time) ?? 0;
+              stackIndexByDecision.set(dispatchDecisionKey(decision), stackIndex);
+              stackCountByTime.set(decision.time, stackIndex + 1);
+              maximumStack = Math.max(maximumStack, stackIndex + 1);
+            }
+            const trackHeight = Math.max(31, maximumStack * 21 + 8);
+
+            return (
+              <div className="demand-cancellation-vehicle-row" key={vehicleId}>
+                <strong>V{vehicleId}</strong>
+                <div
+                  className="demand-cancellation-vehicle-track"
+                  style={{ height: `${trackHeight}px` }}
+                >
+                  {history.map((point, pointIndex) => {
+                    const intervalEnd = Math.min(
+                      candidateEndTime,
+                      history[pointIndex + 1]?.time ?? candidateEndTime,
+                    );
+                    if (intervalEnd <= point.time) return null;
+                    const status = FEASIBILITY_STATUS_META.find(meta =>
+                      point[meta.vehicleIdsKey]?.includes(vehicleId),
+                    );
+                    return (
+                      <span
+                        key={`${vehicleId}-${point.time}`}
+                        className="demand-cancellation-vehicle-interval"
+                        style={{
+                          left: `${((point.time - startTime) / duration) * 100}%`,
+                          width: `${((intervalEnd - point.time) / duration) * 100}%`,
+                          background: status?.color,
+                        }}
+                        title={`V${vehicleId}: ${status?.label ?? 'Status unavailable'} at t=${point.time}`}
+                      />
+                    );
+                  })}
+                  {vehicleChoices.map(decision => {
+                    const actionMeta = DISPATCH_ACTION_META[decision.actionType];
+                    const decisionKey = dispatchDecisionKey(decision);
+                    const stackIndex = stackIndexByDecision.get(decisionKey) ?? 0;
+                    const left = Math.min(
+                      100,
+                      Math.max(0, ((decision.time - startTime) / duration) * 100),
+                    );
+                    const targetLabel = decision.requestId == null
+                      ? 'Wait'
+                      : `${actionMeta.label} R${decision.requestId}`;
+                    const edgeClass = left < 4
+                      ? ' is-left-edge'
+                      : left > 96
+                        ? ' is-right-edge'
+                        : '';
+                    return (
+                      <button
+                        key={decisionKey}
+                        type="button"
+                        className={`demand-cancellation-decision-marker is-${decision.actionType}${selectedDecisionKey === decisionKey ? ' is-selected' : ''}${edgeClass}`}
+                        style={{
+                          top: `${4 + stackIndex * 21}px`,
+                          left: `${left}%`,
+                          background: actionMeta.color,
+                        }}
+                        title={`t=${decision.time} · round ${decision.decisionRound + 1} · V${vehicleId} could serve R${passenger.id} · selected ${targetLabel}`}
+                        aria-label={`At time ${decision.time}, round ${decision.decisionRound + 1}, vehicle ${vehicleId} selected ${targetLabel}`}
+                        aria-pressed={selectedDecisionKey === decisionKey}
+                        onClick={() => onSelectDispatchDecision?.(
+                          selectedDecisionKey === decisionKey ? null : decision,
+                        )}
+                      >
+                        {decision.requestId ?? 'W'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+          <div className="demand-cancellation-vehicle-axis">
+            <span />
+            <div>
+              <b>t={startTime}</b>
+              <b>t={cancellationTime}</b>
+            </div>
+          </div>
+          <div className="demand-cancellation-status-legend">
+            {FEASIBILITY_STATUS_META.map(meta => (
+              <span key={meta.key}><i style={{ background: meta.color }} />{meta.label}</span>
+            ))}
+          </div>
+          {observedChoices.length > 0 ? (
+            <div className="demand-cancellation-decision-legend" aria-label="Observed dispatch choice legend">
+              <b>Observed choice</b>
+              {observedActionTypes.map(actionType => {
+                const meta = DISPATCH_ACTION_META[actionType];
+                return (
+                  <span key={actionType}>
+                    <i style={{ background: meta.color }} />
+                    {meta.label}
+                  </span>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="demand-cancellation-legacy-note">
+          Generate a new replay to visualize vehicle-level candidate history.
+        </p>
+      )}
+    </section>
+  );
+}
+
 export default function DemandNetworkMap({
   passengers,
   replayTime,
@@ -87,7 +418,19 @@ export default function DemandNetworkMap({
   title = 'Demand Network Map',
   embedded = false,
   hideTitle = false,
+  showNodeLabels = true,
+  appearance = 'dashboard',
+  dispatchDecisions = [],
+  selectedDispatchDecision = null,
+  onSelectCancellationContext,
+  onSelectDispatchDecision,
+  onCloseCancellationContext,
 }: DemandNetworkMapProps) {
+  const [selectedCancelledNodeId, setSelectedCancelledNodeId] = useState<number | null>(null);
+  const [selectedCancelledRequestId, setSelectedCancelledRequestId] = useState<number | null>(null);
+  const [diagnosticsPosition, setDiagnosticsPosition] = useState<DiagnosticsPosition | null>(null);
+  const diagnosticsRef = useRef<HTMLElement | null>(null);
+  const diagnosticsDragRef = useRef<DiagnosticsDragState | null>(null);
   const demand = useMemo(
     () => buildNodeDemand(passengers, replayTime),
     [passengers, replayTime],
@@ -102,6 +445,142 @@ export default function DemandNetworkMap({
     () => new Map(demand.map(nodeDemand => [nodeDemand.nodeId, nodeDemand])),
     [demand],
   );
+  const cancelledByNode = useMemo(() => {
+    const byNode = new Map<number, Passenger[]>();
+    for (const passenger of passengers) {
+      if (
+        passenger.status !== 'cancelled' ||
+        passenger.requestTime > replayTime ||
+        (passenger.cancellationTime != null && passenger.cancellationTime > replayTime)
+      ) {
+        continue;
+      }
+      const nodePassengers = byNode.get(passenger.originNodeId) ?? [];
+      nodePassengers.push(passenger);
+      byNode.set(passenger.originNodeId, nodePassengers);
+    }
+    for (const nodePassengers of byNode.values()) {
+      nodePassengers.sort((a, b) =>
+        (a.cancellationTime ?? a.requestTime) - (b.cancellationTime ?? b.requestTime) ||
+        a.id - b.id,
+      );
+    }
+    return byNode;
+  }, [passengers, replayTime]);
+  const selectedCancelledPassengers = selectedCancelledNodeId == null
+    ? []
+    : (cancelledByNode.get(selectedCancelledNodeId) ?? []);
+  const selectedCancelledPassenger = selectedCancelledPassengers.find(
+    passenger => passenger.id === selectedCancelledRequestId,
+  ) ?? null;
+
+  useEffect(() => {
+    if (selectedCancelledNodeId != null && !cancelledByNode.has(selectedCancelledNodeId)) {
+      setSelectedCancelledNodeId(null);
+      onCloseCancellationContext?.();
+    }
+  }, [cancelledByNode, onCloseCancellationContext, selectedCancelledNodeId]);
+
+  useEffect(() => {
+    if (selectedCancelledNodeId == null || selectedCancelledPassengers.length === 0) {
+      setSelectedCancelledRequestId(null);
+      return;
+    }
+    if (!selectedCancelledPassengers.some(passenger => passenger.id === selectedCancelledRequestId)) {
+      setSelectedCancelledRequestId(selectedCancelledPassengers[0].id);
+    }
+  }, [selectedCancelledNodeId, selectedCancelledPassengers, selectedCancelledRequestId]);
+
+  useEffect(() => {
+    setDiagnosticsPosition(null);
+    diagnosticsDragRef.current = null;
+  }, [selectedCancelledNodeId]);
+
+  useEffect(() => {
+    if (selectedCancelledNodeId == null) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSelectedCancelledNodeId(null);
+        onCloseCancellationContext?.();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onCloseCancellationContext, selectedCancelledNodeId]);
+
+  const clampDiagnosticsPosition = (x: number, y: number): DiagnosticsPosition => {
+    const popup = diagnosticsRef.current;
+    if (!popup) return { x, y };
+    const margin = 10;
+    return {
+      x: Math.min(
+        Math.max(margin, x),
+        Math.max(margin, window.innerWidth - popup.offsetWidth - margin),
+      ),
+      y: Math.min(
+        Math.max(margin, y),
+        Math.max(margin, window.innerHeight - popup.offsetHeight - margin),
+      ),
+    };
+  };
+
+  const handleDiagnosticsPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('button')) return;
+    const popup = diagnosticsRef.current;
+    if (!popup) return;
+    const rect = popup.getBoundingClientRect();
+    diagnosticsDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: rect.left,
+      startY: rect.top,
+    };
+    setDiagnosticsPosition(clampDiagnosticsPosition(rect.left, rect.top));
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const handleDiagnosticsPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = diagnosticsDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setDiagnosticsPosition(clampDiagnosticsPosition(
+      drag.startX + event.clientX - drag.startClientX,
+      drag.startY + event.clientY - drag.startClientY,
+    ));
+  };
+
+  const handleDiagnosticsPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = diagnosticsDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    diagnosticsDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const diagnosticsStyle: CSSProperties | undefined = diagnosticsPosition
+    ? { left: diagnosticsPosition.x, top: diagnosticsPosition.y }
+    : undefined;
+  const selectCancelledRequest = (passenger: Passenger | undefined) => {
+    if (!passenger) return;
+    setSelectedCancelledRequestId(passenger.id);
+    onSelectCancellationContext?.({
+      requestId: passenger.id,
+      startTime: passenger.requestTime,
+      endTime: passenger.cancellationTime ?? passenger.requestTime,
+    });
+  };
+  const toggleCancelledNode = (nodeId: number) => {
+    if (selectedCancelledNodeId === nodeId) {
+      setSelectedCancelledNodeId(null);
+      onCloseCancellationContext?.();
+      return;
+    }
+    const nodePassengers = cancelledByNode.get(nodeId) ?? [];
+    setSelectedCancelledNodeId(nodeId);
+    selectCancelledRequest(nodePassengers[0]);
+  };
   const sharedMaximum = Math.max(
     0,
     ...demand.map(nodeDemand => nodeDemand.total),
@@ -131,7 +610,7 @@ export default function DemandNetworkMap({
             className="demand-network-svg"
             aria-label={`${title} at t=${replayTime}`}
           >
-            {links.filter((_, index) => index % 2 === 0).map(link => {
+            {undirectedLinks.map(link => {
               const from = nodeMap.get(link.from);
               const to = nodeMap.get(link.to);
               if (!from || !to) return null;
@@ -166,7 +645,7 @@ export default function DemandNetworkMap({
                     cx={node.x}
                     cy={node.y}
                     r={radius}
-                    fill={total > 0 ? PENDING_COLOR : '#1e293b'}
+                    fill={total > 0 ? PENDING_COLOR : '#ffffff'}
                     stroke={total > 0 ? '#f8fafc' : '#64748b'}
                     strokeWidth={total > 0 ? 0.9 : 0.7}
                   >
@@ -175,16 +654,36 @@ export default function DemandNetworkMap({
                     </title>
                   </circle>
                   {acceptedPath ? <path d={acceptedPath} fill={ACCEPT_COLOR} pointerEvents="none" /> : null}
-                  {cancelledPath ? <path d={cancelledPath} fill={CANCELLED_COLOR} pointerEvents="none" /> : null}
-                  <text
-                    x={node.x}
-                    y={node.y + 0.4}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="demand-network-node-label"
-                  >
-                    {node.label}
-                  </text>
+                  {cancelledPath ? (
+                    <path
+                      d={cancelledPath}
+                      fill={CANCELLED_COLOR}
+                      className={`demand-network-cancelled-sector${selectedCancelledNodeId === node.id ? ' is-selected' : ''}`}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Show ${nodeDemand?.cancelled ?? 0} cancelled requests at node ${node.id}`}
+                      aria-pressed={selectedCancelledNodeId === node.id}
+                      onClick={() => toggleCancelledNode(node.id)}
+                      onKeyDown={event => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return;
+                        event.preventDefault();
+                        toggleCancelledNode(node.id);
+                      }}
+                    >
+                      <title>{`Inspect ${nodeDemand?.cancelled ?? 0} cancellations at N${node.id}`}</title>
+                    </path>
+                  ) : null}
+                  {showNodeLabels ? (
+                    <text
+                      x={node.x}
+                      y={node.y + 0.4}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      className="demand-network-node-label"
+                    >
+                      {node.label}
+                    </text>
+                  ) : null}
                 </g>
               );
             })}
@@ -203,6 +702,83 @@ export default function DemandNetworkMap({
             <span><i style={{ background: CANCELLED_COLOR }} />Cancelled</span>
           </div>
         </div>
+        {selectedCancelledNodeId != null ? createPortal(
+          <section
+            ref={diagnosticsRef}
+            className={`demand-cancellation-diagnostics${appearance === 'paper' ? ' is-paper' : ''}${diagnosticsPosition ? ' is-dragged' : ''}`}
+            style={diagnosticsStyle}
+            aria-label={`Cancellation diagnostics for node ${selectedCancelledNodeId}`}
+          >
+            <div
+              className="demand-cancellation-diagnostics-head"
+              onPointerDown={handleDiagnosticsPointerDown}
+              onPointerMove={handleDiagnosticsPointerMove}
+              onPointerUp={handleDiagnosticsPointerUp}
+              onPointerCancel={handleDiagnosticsPointerUp}
+            >
+              <div>
+                <strong>Cancellation Diagnostics - N{selectedCancelledNodeId}</strong>
+                <span>{selectedCancelledPassengers.length} cancelled requests</span>
+              </div>
+              <button
+                type="button"
+                className="demand-cancellation-close"
+                aria-label="Close cancellation diagnostics"
+                onClick={() => {
+                  setSelectedCancelledNodeId(null);
+                  onCloseCancellationContext?.();
+                }}
+              >
+                <span aria-hidden="true" />
+              </button>
+            </div>
+            <div className="demand-cancellation-analysis-body">
+              <aside className="demand-cancellation-request-list" aria-label="Cancelled requests">
+                <div className="demand-cancellation-request-list-head">
+                  <h4>Requests</h4>
+                  <div className="demand-cancellation-cause-legend" aria-label="Cancellation cause legend">
+                    {(Object.keys(CANCELLATION_CATEGORY_META) as CancellationCategory[]).map(category => {
+                      const meta = CANCELLATION_CATEGORY_META[category];
+                      return (
+                        <span key={category} title={meta.label}>
+                          <i style={{ background: meta.color }} />
+                          {meta.legendLabel}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  {selectedCancelledPassengers.map(passenger => {
+                    const category = cancellationCategory(passenger);
+                    const meta = category == null ? null : CANCELLATION_CATEGORY_META[category];
+                    return (
+                      <button
+                        key={passenger.id}
+                        type="button"
+                        className={passenger.id === selectedCancelledRequestId ? 'is-selected' : ''}
+                        aria-pressed={passenger.id === selectedCancelledRequestId}
+                        title={meta ? `${meta.label}: ${cancellationCause(passenger)}` : cancellationCause(passenger)}
+                        onClick={() => selectCancelledRequest(passenger)}
+                      >
+                        <i className={meta ? '' : 'is-empty'} style={meta ? { background: meta.color } : undefined} />
+                        <strong>R{passenger.id}</strong>
+                        <span>t={passenger.cancellationTime ?? replayTime}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </aside>
+              <CandidateAvailabilityTimeline
+                passenger={selectedCancelledPassenger}
+                dispatchDecisions={dispatchDecisions}
+                selectedDispatchDecision={selectedDispatchDecision}
+                onSelectDispatchDecision={onSelectDispatchDecision}
+              />
+            </div>
+          </section>,
+          document.body,
+        ) : null}
       </div>
     </div>
   );

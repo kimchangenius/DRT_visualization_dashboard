@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import NetworkMap from './NetworkMap';
+import CancellationContextMap from './CancellationContextMap';
 import VehicleOperationMap, { type OperationHeatStatus } from './VehicleOperationMap';
-import DemandNetworkMap from './DemandNetworkMap';
+import DemandNetworkMap, { type CancellationAnalysisContext } from './DemandNetworkMap';
 import RequestHeatmap from './RequestHeatmap';
 import TemporalComparisonCharts from './TemporalComparisonCharts';
 import VehicleTemporalComparisonCharts from './VehicleTemporalComparisonCharts';
@@ -9,14 +10,7 @@ import { RESULT_A_COLOR, RESULT_B_COLOR } from '../config';
 import type { SimulationMetrics, SimulationState, VehiclePatternSelection } from '../types/simulation';
 import { formatSimTime } from '../utils/time';
 import { frameAtOrBefore, framesBetween } from '../utils/replay';
-
-interface LoadedReplay {
-  name: string;
-  runName: string;
-  frames: SimulationState[];
-  timeMin: number;
-  timeMax: number;
-}
+import { loadReplayFile, type LoadedReplay } from '../utils/replayPayload';
 
 type ReplaySide = 'left' | 'right';
 
@@ -55,7 +49,7 @@ const COMPARISON_METRIC_ROWS: ComparisonMetricRow[] = [
     value: metrics => metrics.totalPassengersServed,
   },
   {
-    label: 'Canceled Count',
+    label: 'Canceled Passengers',
     value: metrics => metrics.cancelCount ?? 0,
   },
   {
@@ -73,58 +67,6 @@ const COMPARISON_METRIC_ROWS: ComparisonMetricRow[] = [
     value: metrics => metrics.totalPassengersWaiting,
   },
 ];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function hasNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function isSimulationState(value: unknown): value is SimulationState {
-  if (!isRecord(value)) return false;
-  if (!isRecord(value.metrics)) return false;
-  return (
-    hasNumber(value.metrics.currentTime) &&
-    Array.isArray(value.vehicles) &&
-    Array.isArray(value.passengers) &&
-    Array.isArray(value.utilizationHistory) &&
-    Array.isArray(value.passengerHistory) &&
-    Array.isArray(value.requestStatusData)
-  );
-}
-
-function parseReplayPayload(payload: unknown, fileName: string): LoadedReplay {
-  if (!isRecord(payload)) {
-    throw new Error('The file must contain a replay JSON object.');
-  }
-  if (payload.version !== 1) {
-    throw new Error('Unsupported replay file version.');
-  }
-  if (!Array.isArray(payload.frames) || payload.frames.length === 0) {
-    throw new Error('Replay file must include at least one frame.');
-  }
-  if (!payload.frames.every(isSimulationState)) {
-    throw new Error('Replay frames do not match the dashboard state format.');
-  }
-
-  const frames = [...payload.frames].sort(
-    (a, b) => a.metrics.currentTime - b.metrics.currentTime,
-  );
-  const times = frames.map(frame => frame.metrics.currentTime);
-  const runName = typeof payload.runName === 'string' && payload.runName.trim()
-    ? payload.runName
-    : fileName;
-
-  return {
-    name: fileName,
-    runName,
-    frames,
-    timeMin: Math.min(...times),
-    timeMax: Math.max(...times),
-  };
-}
 
 function clampReplayTime(replay: LoadedReplay | null, time: number): number {
   if (!replay) return 0;
@@ -271,6 +213,8 @@ function ResultDemandNetworkPanel({
   comparisonReplayTime,
   selectedSegment,
   comparisonSelectedSegment,
+  onSelectCancellationContext,
+  onCloseCancellationContext,
   isExpanded,
   onToggleExpanded,
 }: {
@@ -283,6 +227,8 @@ function ResultDemandNetworkPanel({
   comparisonReplayTime: number;
   selectedSegment: VehiclePatternSelection | null;
   comparisonSelectedSegment: VehiclePatternSelection | null;
+  onSelectCancellationContext: (context: CancellationAnalysisContext) => void;
+  onCloseCancellationContext: () => void;
   isExpanded: boolean;
   onToggleExpanded: () => void;
 }) {
@@ -344,6 +290,8 @@ function ResultDemandNetworkPanel({
                 title={`${SIDE_LABEL[side]} Demand Network Map`}
                 passengers={intervalFrame.passengers}
                 replayTime={replayTime}
+                onSelectCancellationContext={onSelectCancellationContext}
+                onCloseCancellationContext={onCloseCancellationContext}
                 comparisonPassengers={hasComparableOverview ? comparisonFrame?.passengers : undefined}
                 comparisonReplayTime={hasComparableOverview && comparisonFrame ? comparisonReplayTime : undefined}
               />
@@ -361,9 +309,11 @@ function ResultVehicleOperationPanel({
   frame,
   replayTime,
   selectedSegment,
+  cancellationContext,
   comparisonReplay,
   comparisonReplayTime,
   comparisonSelectedSegment,
+  comparisonCancellationContext,
   statusVisibility,
   onStatusVisibilityChange,
   isExpanded,
@@ -374,26 +324,37 @@ function ResultVehicleOperationPanel({
   frame: SimulationState | null;
   replayTime: number;
   selectedSegment: VehiclePatternSelection | null;
+  cancellationContext: CancellationAnalysisContext | null;
   comparisonReplay: LoadedReplay | null;
   comparisonReplayTime: number;
   comparisonSelectedSegment: VehiclePatternSelection | null;
+  comparisonCancellationContext: CancellationAnalysisContext | null;
   statusVisibility: Record<OperationHeatStatus, boolean>;
   onStatusVisibilityChange: (visibility: Record<OperationHeatStatus, boolean>) => void;
   isExpanded: boolean;
   onToggleExpanded: () => void;
 }) {
   const bodyId = `compare-vehicle-operation-map-${side}`;
-  const focusVehicleId = selectedSegment?.vehicleId ?? null;
-  const intervalStart = selectedSegment?.startTime;
-  const intervalEnd = selectedSegment?.endTime;
+  const focusVehicleId = cancellationContext ? null : selectedSegment?.vehicleId ?? null;
+  const intervalStart = cancellationContext?.startTime ?? selectedSegment?.startTime;
+  const intervalEnd = cancellationContext?.endTime ?? selectedSegment?.endTime;
   const displayTime = intervalEnd ?? replayTime;
-  const comparisonIntervalStart = comparisonSelectedSegment?.startTime;
-  const comparisonDisplayTime = comparisonSelectedSegment?.endTime ?? comparisonReplayTime;
-  const hasComparableContext = selectedSegment != null && comparisonSelectedSegment != null;
-  const hasComparableOverview = selectedSegment == null && comparisonSelectedSegment == null;
+  const comparisonIntervalStart = comparisonCancellationContext?.startTime ??
+    comparisonSelectedSegment?.startTime;
+  const comparisonDisplayTime = comparisonCancellationContext?.endTime ??
+    comparisonSelectedSegment?.endTime ??
+    comparisonReplayTime;
+  const hasComparableContext = (selectedSegment != null || cancellationContext != null) &&
+    (comparisonSelectedSegment != null || comparisonCancellationContext != null);
+  const hasComparableOverview = selectedSegment == null &&
+    cancellationContext == null &&
+    comparisonSelectedSegment == null &&
+    comparisonCancellationContext == null;
   const comparisonSource = hasComparableContext || hasComparableOverview ? comparisonReplay : null;
-  const contextLabel = focusVehicleId == null
-    ? `t=${formatSimTime(replayTime)}`
+  const contextLabel = cancellationContext
+    ? `R${cancellationContext.requestId} · t=${formatSimTime(intervalStart ?? replayTime)}-${formatSimTime(displayTime)}`
+    : focusVehicleId == null
+      ? `t=${formatSimTime(replayTime)}`
     : `V${focusVehicleId} · t=${formatSimTime(intervalStart ?? replayTime)}-${formatSimTime(displayTime)}`;
 
   return (
@@ -404,12 +365,13 @@ function ResultVehicleOperationPanel({
           className="compare-map-accordion-head"
           aria-expanded={isExpanded}
           aria-controls={bodyId}
-          aria-label={(isExpanded ? 'Collapse ' : 'Expand ') + SIDE_LABEL[side] + ' vehicle activity heatmap'}
+          aria-label={(isExpanded ? 'Collapse ' : 'Expand ') + SIDE_LABEL[side] +
+            (cancellationContext ? ' vehicle and request snapshot' : ' vehicle activity heatmap')}
           onClick={onToggleExpanded}
         >
           <span className="compare-map-accordion-labels">
             <span className="compare-map-accordion-title" style={{ color: SIDE_COLOR[side] }}>
-              {SIDE_LABEL[side]} Vehicle Activity
+              {SIDE_LABEL[side]} {cancellationContext ? 'Vehicle & Request Snapshot' : 'Vehicle Activity'}
             </span>
           </span>
           <span className="compare-map-accordion-icon" aria-hidden="true" />
@@ -418,6 +380,11 @@ function ResultVehicleOperationPanel({
           <div id={bodyId} className="compare-map-accordion-body compare-operation-accordion-body">
             {!replay || !frame ? (
               <div className="compare-empty-text">Load a replay JSON file.</div>
+            ) : cancellationContext ? (
+              <CancellationContextMap
+                frame={frame}
+                selectedRequestId={cancellationContext.requestId}
+              />
             ) : (
               <VehicleOperationMap
                 embedded
@@ -431,7 +398,11 @@ function ResultVehicleOperationPanel({
                 comparisonFrames={comparisonSource?.frames}
                 comparisonStartTime={comparisonIntervalStart}
                 comparisonCurrentTime={comparisonSource ? comparisonDisplayTime : undefined}
-                comparisonFocusVehicleId={comparisonSelectedSegment?.vehicleId ?? null}
+                comparisonFocusVehicleId={
+                  comparisonCancellationContext
+                    ? null
+                    : comparisonSelectedSegment?.vehicleId ?? null
+                }
                 statusVisibility={statusVisibility}
                 onStatusVisibilityChange={onStatusVisibilityChange}
               />
@@ -539,6 +510,18 @@ export default function ResultCompare() {
     left: null,
     right: null,
   });
+  const [cancellationContexts, setCancellationContexts] = useState<Record<ReplaySide, CancellationAnalysisContext | null>>({
+    left: null,
+    right: null,
+  });
+  const cancellationReturnTimesRef = useRef<Record<ReplaySide, number | null>>({
+    left: null,
+    right: null,
+  });
+  const fileLoadIdsRef = useRef<Record<ReplaySide, number>>({
+    left: 0,
+    right: 0,
+  });
 
   const loadedReplays = useMemo(
     () => [leftReplay, rightReplay].filter((r): r is LoadedReplay => r !== null),
@@ -552,39 +535,57 @@ export default function ResultCompare() {
 
   const leftFrame = useMemo(() => leftReplay ? frameAtOrBefore(leftReplay.frames, replayTimes.left) : null, [leftReplay, replayTimes.left]);
   const rightFrame = useMemo(() => rightReplay ? frameAtOrBefore(rightReplay.frames, replayTimes.right) : null, [rightReplay, replayTimes.right]);
+  const leftDemandReplayTime = cancellationContexts.left
+    ? cancellationReturnTimesRef.current.left ?? replayTimes.left
+    : replayTimes.left;
+  const rightDemandReplayTime = cancellationContexts.right
+    ? cancellationReturnTimesRef.current.right ?? replayTimes.right
+    : replayTimes.right;
+  const leftDemandFrame = useMemo(
+    () => leftReplay ? frameAtOrBefore(leftReplay.frames, leftDemandReplayTime) : null,
+    [leftDemandReplayTime, leftReplay],
+  );
+  const rightDemandFrame = useMemo(
+    () => rightReplay ? frameAtOrBefore(rightReplay.frames, rightDemandReplayTime) : null,
+    [rightDemandReplayTime, rightReplay],
+  );
+  const leftTemporalSource = useMemo(() => leftReplay ? {
+    frames: leftReplay.frames,
+    passengerEvents: leftReplay.passengerEvents,
+  } : null, [leftReplay]);
+  const rightTemporalSource = useMemo(() => rightReplay ? {
+    frames: rightReplay.frames,
+    passengerEvents: rightReplay.passengerEvents,
+  } : null, [rightReplay]);
 
-  const loadFile = useCallback((side: ReplaySide, file: File) => {
-    const reader = new FileReader();
+  const loadFile = useCallback(async (side: ReplaySide, file: File) => {
+    const loadId = fileLoadIdsRef.current[side] + 1;
+    fileLoadIdsRef.current[side] = loadId;
     const setReplay = side === 'left' ? setLeftReplay : setRightReplay;
     const setError = side === 'left' ? setLeftError : setRightError;
 
     setError(null);
-    setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
-    reader.onload = () => {
-      try {
-        const text = typeof reader.result === 'string' ? reader.result : '';
-        const parsed = parseReplayPayload(JSON.parse(text), file.name);
-        setReplay(parsed);
-        const nextLeftReplay = side === 'left' ? parsed : leftReplay;
-        const nextRightReplay = side === 'right' ? parsed : rightReplay;
-        setReplayTimes(prev => ({
-          ...(isReplayTimeSynced
-            ? syncedReplayTimes(nextLeftReplay, nextRightReplay, parsed.timeMax)
-            : {
-              left: side === 'left' ? parsed.timeMax : leftReplay?.timeMax ?? prev.left,
-              right: side === 'right' ? parsed.timeMax : rightReplay?.timeMax ?? prev.right,
-            }),
-        }));
-      } catch (error) {
-        setReplay(null);
-        setError(error instanceof Error ? error.message : 'Failed to load replay file.');
-      }
-    };
-    reader.onerror = () => {
-      setReplay(null);
-      setError('Failed to read replay file.');
-    };
-    reader.readAsText(file);
+    try {
+      const parsed = await loadReplayFile(file);
+      if (loadId !== fileLoadIdsRef.current[side]) return;
+      setReplay(parsed);
+      setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
+      setCancellationContexts(previous => ({ ...previous, [side]: null }));
+      cancellationReturnTimesRef.current[side] = null;
+      const nextLeftReplay = side === 'left' ? parsed : leftReplay;
+      const nextRightReplay = side === 'right' ? parsed : rightReplay;
+      setReplayTimes(prev => ({
+        ...(isReplayTimeSynced
+          ? syncedReplayTimes(nextLeftReplay, nextRightReplay, parsed.timeMax)
+          : {
+            left: side === 'left' ? parsed.timeMax : leftReplay?.timeMax ?? prev.left,
+            right: side === 'right' ? parsed.timeMax : rightReplay?.timeMax ?? prev.right,
+          }),
+      }));
+    } catch (error) {
+      if (loadId !== fileLoadIdsRef.current[side]) return;
+      setError(error instanceof Error ? error.message : 'Failed to load replay file.');
+    }
   }, [isReplayTimeSynced, leftReplay, rightReplay]);
 
   useEffect(() => {
@@ -609,11 +610,15 @@ export default function ResultCompare() {
     if (isReplayTimeSynced) {
       setReplayTimes(syncedReplayTimes(leftReplay, rightReplay, time));
       setSelectedVehicleSegments({ left: null, right: null });
+      setCancellationContexts({ left: null, right: null });
+      cancellationReturnTimesRef.current = { left: null, right: null };
       return;
     }
 
     setReplayTimes(prev => ({ ...prev, [side]: time }));
     setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
+    setCancellationContexts(previous => ({ ...previous, [side]: null }));
+    cancellationReturnTimesRef.current[side] = null;
   }, [isReplayTimeSynced, leftReplay, rightReplay]);
 
   const handleReplaySyncToggle = useCallback((enabled: boolean) => {
@@ -623,9 +628,13 @@ export default function ResultCompare() {
     const syncTime = leftReplay ? replayTimes.left : replayTimes.right;
     setReplayTimes(syncedReplayTimes(leftReplay, rightReplay, syncTime));
     setSelectedVehicleSegments({ left: null, right: null });
+    setCancellationContexts({ left: null, right: null });
+    cancellationReturnTimesRef.current = { left: null, right: null };
   }, [leftReplay, replayTimes.left, replayTimes.right, rightReplay]);
 
   const handleSelectVehicleSegment = useCallback((selection: VehiclePatternSelection) => {
+    setCancellationContexts(previous => ({ ...previous, [selection.resultSide]: null }));
+    cancellationReturnTimesRef.current[selection.resultSide] = null;
     setSelectedVehicleSegments(previous => {
       const current = previous[selection.resultSide];
       const isSameSelection =
@@ -644,6 +653,29 @@ export default function ResultCompare() {
 
   const clearVehicleSegment = useCallback((side: ReplaySide) => {
     setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
+  }, []);
+
+  const handleCancellationContext = useCallback((
+    side: ReplaySide,
+    context: CancellationAnalysisContext,
+  ) => {
+    if (cancellationContexts[side] == null && cancellationReturnTimesRef.current[side] == null) {
+      cancellationReturnTimesRef.current[side] = replayTimes[side];
+    }
+    setCancellationContexts(previous => ({ ...previous, [side]: context }));
+    setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
+    setReplayTimes(previous => ({ ...previous, [side]: context.endTime }));
+    setExpandedOperationMaps(previous => ({ ...previous, [side]: true }));
+    setPatternMode('vehicle');
+  }, [cancellationContexts, replayTimes]);
+
+  const clearCancellationContext = useCallback((side: ReplaySide) => {
+    const returnTime = cancellationReturnTimesRef.current[side];
+    cancellationReturnTimesRef.current[side] = null;
+    setCancellationContexts(previous => ({ ...previous, [side]: null }));
+    if (returnTime != null) {
+      setReplayTimes(previous => ({ ...previous, [side]: returnTime }));
+    }
   }, []);
 
   const toggleNetworkMap = useCallback((side: ReplaySide) => {
@@ -742,9 +774,11 @@ export default function ResultCompare() {
             frame={leftFrame}
             replayTime={replayTimes.left}
             selectedSegment={selectedVehicleSegments.left}
+            cancellationContext={cancellationContexts.left}
             comparisonReplay={rightReplay}
             comparisonReplayTime={replayTimes.right}
             comparisonSelectedSegment={selectedVehicleSegments.right}
+            comparisonCancellationContext={cancellationContexts.right}
             statusVisibility={operationStatusVisibility}
             onStatusVisibilityChange={setOperationStatusVisibility}
             isExpanded={expandedOperationMaps.left}
@@ -756,9 +790,11 @@ export default function ResultCompare() {
             frame={rightFrame}
             replayTime={replayTimes.right}
             selectedSegment={selectedVehicleSegments.right}
+            cancellationContext={cancellationContexts.right}
             comparisonReplay={leftReplay}
             comparisonReplayTime={replayTimes.left}
             comparisonSelectedSegment={selectedVehicleSegments.left}
+            comparisonCancellationContext={cancellationContexts.left}
             statusVisibility={operationStatusVisibility}
             onStatusVisibilityChange={setOperationStatusVisibility}
             isExpanded={expandedOperationMaps.right}
@@ -769,33 +805,60 @@ export default function ResultCompare() {
           <ResultDemandNetworkPanel
             side="left"
             replay={leftReplay}
-            frame={leftFrame}
-            replayTime={replayTimes.left}
+            frame={leftDemandFrame}
+            replayTime={leftDemandReplayTime}
             comparisonReplay={rightReplay}
-            comparisonFrame={rightFrame}
-            comparisonReplayTime={replayTimes.right}
+            comparisonFrame={rightDemandFrame}
+            comparisonReplayTime={rightDemandReplayTime}
             selectedSegment={selectedVehicleSegments.left}
             comparisonSelectedSegment={selectedVehicleSegments.right}
+            onSelectCancellationContext={context => handleCancellationContext('left', context)}
+            onCloseCancellationContext={() => clearCancellationContext('left')}
             isExpanded={expandedHeatmaps.left}
             onToggleExpanded={() => toggleHeatmap('left')}
           />
           <ResultDemandNetworkPanel
             side="right"
             replay={rightReplay}
-            frame={rightFrame}
-            replayTime={replayTimes.right}
+            frame={rightDemandFrame}
+            replayTime={rightDemandReplayTime}
             comparisonReplay={leftReplay}
-            comparisonFrame={leftFrame}
-            comparisonReplayTime={replayTimes.left}
+            comparisonFrame={leftDemandFrame}
+            comparisonReplayTime={leftDemandReplayTime}
             selectedSegment={selectedVehicleSegments.right}
             comparisonSelectedSegment={selectedVehicleSegments.left}
+            onSelectCancellationContext={context => handleCancellationContext('right', context)}
+            onCloseCancellationContext={() => clearCancellationContext('right')}
             isExpanded={expandedHeatmaps.right}
             onToggleExpanded={() => toggleHeatmap('right')}
           />
         </div>
-        {selectedVehicleSegments.left || selectedVehicleSegments.right ? (
+        {selectedVehicleSegments.left ||
+        selectedVehicleSegments.right ||
+        cancellationContexts.left ||
+        cancellationContexts.right ? (
           <div className="compare-selection-context" role="status">
             {(['left', 'right'] as ReplaySide[]).map(side => {
+              const cancellationContext = cancellationContexts[side];
+              if (cancellationContext) {
+                return (
+                  <div className="compare-selection-context-item" key={side}>
+                    <span>
+                      {SIDE_LABEL[side]} · R{cancellationContext.requestId} · {' '}
+                      t={formatSimTime(cancellationContext.startTime)}-{formatSimTime(cancellationContext.endTime)}
+                    </span>
+                    <button
+                      type="button"
+                      className="compare-selection-clear"
+                      aria-label={`Clear ${SIDE_LABEL[side]} cancellation request interval`}
+                      title={`Clear ${SIDE_LABEL[side]} cancellation interval`}
+                      onClick={() => clearCancellationContext(side)}
+                    >
+                      <span aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              }
               const selection = selectedVehicleSegments[side];
               if (!selection) return null;
               return (
@@ -820,16 +883,24 @@ export default function ResultCompare() {
         ) : null}
         {patternMode === 'vehicle' ? (
           <VehicleTemporalComparisonCharts
-            resultA={leftReplay ? { frames: leftReplay.frames } : null}
-            resultB={rightReplay ? { frames: rightReplay.frames } : null}
+            resultA={leftTemporalSource}
+            resultB={rightTemporalSource}
             currentTimes={replayTimes}
             selectedSegments={selectedVehicleSegments}
+            contextIntervals={{
+              left: cancellationContexts.left
+                ? [cancellationContexts.left.startTime, cancellationContexts.left.endTime]
+                : null,
+              right: cancellationContexts.right
+                ? [cancellationContexts.right.startTime, cancellationContexts.right.endTime]
+                : null,
+            }}
             onSelectSegment={handleSelectVehicleSegment}
           />
         ) : (
           <TemporalComparisonCharts
-            resultA={leftReplay ? { frames: leftReplay.frames } : null}
-            resultB={rightReplay ? { frames: rightReplay.frames } : null}
+            resultA={leftTemporalSource}
+            resultB={rightTemporalSource}
             currentTimes={replayTimes}
           />
         )}

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import type { Passenger } from '../types/simulation';
+import { formatOptionalTime } from '../utils/time';
 
 interface VehicleRequestOperationProps {
   vehicleId: number;
@@ -15,11 +16,6 @@ function statusLabel(s: Passenger['status']): string {
     case 'cancelled': return 'Cancelled';
     default: return s;
   }
-}
-
-function formatTime(t: number | null): string {
-  if (t == null) return '—';
-  return String(t);
 }
 
 export default function VehicleRequestOperation({
@@ -95,8 +91,8 @@ export default function VehicleRequestOperation({
                         {statusLabel(atReplayTime)}
                       </span>
                     </td>
-                    <td>{p.pickupTime != null && p.pickupTime <= replayTime ? formatTime(p.pickupTime) : '—'}</td>
-                    <td>{p.deliveryTime != null && p.deliveryTime <= replayTime ? formatTime(p.deliveryTime) : '—'}</td>
+                    <td>{p.pickupTime != null && p.pickupTime <= replayTime ? formatOptionalTime(p.pickupTime) : '—'}</td>
+                    <td>{p.deliveryTime != null && p.deliveryTime <= replayTime ? formatOptionalTime(p.deliveryTime) : '—'}</td>
                   </tr>
                 );
               })}

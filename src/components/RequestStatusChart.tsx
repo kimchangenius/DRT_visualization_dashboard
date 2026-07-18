@@ -1,6 +1,5 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import type { RequestStatusData } from '../types/simulation';
-import { CHART_ANIMATION_DURATION_MS } from '../config';
 
 interface RequestStatusChartProps {
   data: RequestStatusData[];
@@ -23,9 +22,7 @@ export default function RequestStatusChart({ data }: RequestStatusChartProps) {
               outerRadius={60}
               paddingAngle={2}
               dataKey="value"
-              isAnimationActive
-              animationDuration={CHART_ANIMATION_DURATION_MS}
-              animationEasing="ease-out"
+              isAnimationActive={false}
             >
               {(total > 0 ? data : [{ name: 'No Data', value: 1, color: '#334155' }]).map(
                 (entry, index) => (

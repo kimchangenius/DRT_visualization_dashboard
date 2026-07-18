@@ -370,9 +370,11 @@ export default function TemporalComparisonCharts({
   resultB,
   currentTimes,
 }: TemporalComparisonChartsProps) {
-  const data = buildTemporalComparisonData(resultA, resultB);
-  const chartData = data;
-  const hasData = data.length > 0;
+  const chartData = useMemo(
+    () => buildTemporalComparisonData(resultA, resultB),
+    [resultA, resultB],
+  );
+  const hasData = chartData.length > 0;
   const fullDomain = useMemo(() => domainFromValues(chartData.map(point => point.time)), [chartData]);
   const [zoomDomains, setZoomDomains] = useState<ZoomDomains>({});
   const [panningMetric, setPanningMetric] = useState<string | null>(null);

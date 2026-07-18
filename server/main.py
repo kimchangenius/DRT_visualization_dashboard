@@ -1,21 +1,18 @@
 import argparse
 import csv
-import glob
 import json
 import os
-from datetime import datetime, timezone
 
 import app.config as cfg
 from app.agent import DQNAgent
 from app.env_builder import EnvBuilder
+from app.inference_runtime import dispatch_idle_vehicles, resolve_model_path as find_model_path
 from app.request_status import RequestStatus
 from app.state_builder import (
-    append_history_sample,
+    build_simulation_replay_payload,
     build_state,
     json_default,
-    sim_config_payload,
 )
-from app.vehicle_status import VehicleStatus
 from scripts.gen_scenario_csv import generate_scenario_csv
 
 CURR_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -38,29 +35,8 @@ def normalize_scenario(value):
     return scenario if scenario in AVAILABLE_SCENARIOS else 'S1'
 
 
-def _existing_h5_files(directory):
-    return [path for path in glob.glob(os.path.join(directory, '*.h5')) if os.path.isfile(path)]
-
-
 def resolve_model_path():
-    env_model_path = os.environ.get('DRT_MODEL_PATH')
-    if env_model_path:
-        return env_model_path
-
-    exact_candidates = [
-        os.path.join(DATA_PATH, MODEL_FILENAME),
-        os.path.join(RESULT_PATH, MODEL_FILENAME),
-    ]
-    for path in exact_candidates:
-        if os.path.exists(path):
-            return path
-
-    for directory in (DATA_PATH, RESULT_PATH):
-        weight_files = _existing_h5_files(directory)
-        if weight_files:
-            return max(weight_files, key=os.path.getmtime)
-
-    return os.path.join(DATA_PATH, MODEL_FILENAME)
+    return find_model_path(DATA_PATH, RESULT_PATH, MODEL_FILENAME)
 
 
 def build_agent(env, model_path):
@@ -90,43 +66,6 @@ def generate_request_filename(scenario, seed, n_req, horizon):
     return os.path.relpath(request_path, DATA_PATH)
 
 
-def dispatch_idle_vehicles(env, agent):
-    while env.has_idle_vehicle():
-        idle_vehicles = [v for v in env.vehicle_list if v.status == VehicleStatus.IDLE]
-        if not idle_vehicles:
-            break
-
-        candidates_by_v = env.enumerate_pair_candidates(idle_vehicles, include_wait=True)
-        has_real_candidate = any(
-            c.get('is_real', 0)
-            for candidates in candidates_by_v.values()
-            for c in candidates
-        )
-        if not has_real_candidate:
-            break
-
-        snapshot = env.get_snapshot()
-        actions = agent.act_pickup_assignments(
-            env,
-            snapshot=snapshot,
-            candidates_by_v=candidates_by_v,
-        )
-        if not actions:
-            break
-
-        acted = False
-        for action in actions:
-            request = action.get('request')
-            if request is not None and request not in env.active_request_list:
-                continue
-            env.step(action)
-            acted = True
-
-        if not acted:
-            break
-
-
-
 def run_inference(env_builder, scenario, seed, model_path=None, result_dir=None):
     if result_dir is None:
         result_dir = os.path.join(RESULT_PATH, 'inference')
@@ -134,16 +73,20 @@ def run_inference(env_builder, scenario, seed, model_path=None, result_dir=None)
 
     env = env_builder.build()
     env.reset()
-    agent = build_agent(env, model_path or resolve_model_path())
+    resolved_model_path = model_path or resolve_model_path()
+    agent = build_agent(env, resolved_model_path)
 
     run_config = {
         **MODEL_CONFIG,
         'scenario': scenario,
         'scenario_seed': seed,
+        'model_weight_file': os.path.basename(resolved_model_path),
     }
-    utilization_history = []
-    passenger_history = []
-    frames = [build_state(env, utilization_history, passenger_history, config=run_config)]
+    frames = [build_state(
+        env,
+        config=run_config,
+        include_live_series=False,
+    )]
 
     while True:
         dispatch_idle_vehicles(env, agent)
@@ -151,10 +94,11 @@ def run_inference(env_builder, scenario, seed, model_path=None, result_dir=None)
         env.curr_time += 1
         env.handle_time_update()
 
-        if env.curr_time % 2 == 0:
-            append_history_sample(env, utilization_history, passenger_history)
-
-        frames.append(build_state(env, utilization_history, passenger_history, config=run_config))
+        frames.append(build_state(
+            env,
+            config=run_config,
+            include_live_series=False,
+        ))
         if env.is_done():
             break
 
@@ -196,19 +140,21 @@ def run_inference(env_builder, scenario, seed, model_path=None, result_dir=None)
         writer.writerows(req_rows)
 
     replay_path = os.path.join(result_dir, REPLAY_FILENAME)
+    replay_payload = build_simulation_replay_payload(
+        env,
+        {'frames': frames},
+        config=run_config,
+        run_name=os.path.basename(result_dir),
+    )
     with open(replay_path, 'w', encoding='utf-8') as f:
-        json.dump({
-            'version': 1,
-            'generatedAt': datetime.now(timezone.utc).isoformat(),
-            'runName': os.path.basename(result_dir),
-            'config': sim_config_payload(
-                run_config,
-                max_num_request=len(getattr(env, 'original_request_list', []) or []),
-            ),
-            'frames': frames,
-        }, f, ensure_ascii=False, default=json_default)
+        json.dump(
+            replay_payload,
+            f,
+            ensure_ascii=False,
+            default=json_default,
+        )
 
-    print(f"Scenario: {scenario} seed={seed} | Weight: {os.path.basename(resolve_model_path())}")
+    print(f"Scenario: {scenario} seed={seed} | Weight: {os.path.basename(resolved_model_path)}")
     print(f"Accepted: {total_num_accept} | Served: {served_count} | "
           f"Avg Wait: {mean_wt:.2f} | Avg In-Vehicle: {mean_ivt:.2f}")
     print(f"Replay JSON: {replay_path}")

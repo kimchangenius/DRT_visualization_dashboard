@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
-import { nodes, links } from '../data/siouxFallsNetwork';
+import { nodes, undirectedLinks } from '../data/siouxFallsNetwork';
 import type {
   Vehicle,
   Passenger,
@@ -9,6 +9,11 @@ import type {
   SimulationState,
   // NodeActivity,  // Activity ring – disabled
 } from '../types/simulation';
+import {
+  normalizeEdgeKey,
+  routeNodeIdsForVehicle,
+  vehiclePosition,
+} from '../utils/networkGeometry';
 
 interface NetworkMapProps {
   vehicles: Vehicle[];
@@ -59,70 +64,6 @@ function tooltipPlacementForNode(nodeId: number | null): TooltipPlacement {
   };
 }
 
-const adjacency = new Map<number, Set<number>>();
-for (const l of links) {
-  if (!adjacency.has(l.from)) adjacency.set(l.from, new Set());
-  if (!adjacency.has(l.to)) adjacency.set(l.to, new Set());
-  adjacency.get(l.from)!.add(l.to);
-  adjacency.get(l.to)!.add(l.from);
-}
-
-function shortestPathOnGraph(from: number, to: number): number[] | null {
-  if (from === to) return [from];
-  const queue: number[][] = [[from]];
-  const visited = new Set<number>([from]);
-  while (queue.length) {
-    const path = queue.shift()!;
-    const u = path[path.length - 1];
-    for (const v of adjacency.get(u) ?? []) {
-      if (visited.has(v)) continue;
-      if (v === to) return [...path, v];
-      visited.add(v);
-      queue.push([...path, v]);
-    }
-  }
-  return null;
-}
-
-function pointAlongPolyline(nodeIds: number[], t: number): { x: number; y: number } | null {
-  if (nodeIds.length === 0) return null;
-  if (nodeIds.length === 1) {
-    const n = nodeById.get(nodeIds[0]);
-    return n ? { x: n.x, y: n.y } : null;
-  }
-  const clamped = Math.min(1, Math.max(0, t));
-  let total = 0;
-  const segLens: number[] = [];
-  for (let i = 0; i < nodeIds.length - 1; i++) {
-    const a = nodeById.get(nodeIds[i]);
-    const b = nodeById.get(nodeIds[i + 1]);
-    if (!a || !b) return null;
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    segLens.push(len);
-    total += len;
-  }
-  if (total <= 0) {
-    const n = nodeById.get(nodeIds[0]);
-    return n ? { x: n.x, y: n.y } : null;
-  }
-  let dist = clamped * total;
-  for (let i = 0; i < nodeIds.length - 1; i++) {
-    const len = segLens[i];
-    const a = nodeById.get(nodeIds[i])!;
-    const b = nodeById.get(nodeIds[i + 1])!;
-    if (dist <= len) {
-      const r = len > 0 ? dist / len : 0;
-      return {
-        x: a.x + (b.x - a.x) * r,
-        y: a.y + (b.y - a.y) * r,
-      };
-    }
-    dist -= len;
-  }
-  const last = nodeById.get(nodeIds[nodeIds.length - 1]);
-  return last ? { x: last.x, y: last.y } : null;
-}
-
 function vehicleColor(status: string) {
   switch (status) {
     case 'idle': return '#3b82f6';
@@ -132,20 +73,12 @@ function vehicleColor(status: string) {
   }
 }
 
-function normalizeEdgeKey(a: number, b: number): string {
-  return a < b ? `${a}-${b}` : `${b}-${a}`;
-}
-
 function buildMovingLinkColors(vehicles: Vehicle[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
   for (const v of vehicles) {
     if (v.status !== 'picking_up' && v.status !== 'carrying') continue;
     if (v.targetNodeId == null) continue;
-    const route =
-      shortestPathOnGraph(v.currentNodeId, v.targetNodeId) ?? [
-        v.currentNodeId,
-        v.targetNodeId,
-      ];
+    const route = routeNodeIdsForVehicle(v);
     if (route.length < 2) continue;
     const col = vehicleColor(v.status);
     for (let i = 0; i < route.length - 1; i++) {
@@ -156,23 +89,6 @@ function buildMovingLinkColors(vehicles: Vehicle[]): Map<string, string[]> {
     }
   }
   return map;
-}
-
-function routeNodeIdsForVehicle(vehicle: Vehicle): number[] {
-  if (vehicle.path.length >= 2) {
-    if (vehicle.path.length > 2) return vehicle.path;
-    const route = shortestPathOnGraph(vehicle.path[0], vehicle.path[1]);
-    return route && route.length >= 2 ? route : vehicle.path;
-  }
-
-  if (vehicle.targetNodeId != null) {
-    return shortestPathOnGraph(vehicle.currentNodeId, vehicle.targetNodeId) ?? [
-      vehicle.currentNodeId,
-      vehicle.targetNodeId,
-    ];
-  }
-
-  return [vehicle.currentNodeId];
 }
 
 function appendRouteNodes(target: number[], route: number[]) {
@@ -251,24 +167,6 @@ function collectSegmentPassengers(
   }
 
   return Array.from(byId.values()).sort((a, b) => a.id - b.id);
-}
-
-function getVehiclePosition(v: Vehicle) {
-  if (v.path.length >= 2) {
-    const t = Math.min(1, Math.max(0, v.pathProgress));
-    let route: number[];
-    if (v.path.length > 2) {
-      route = v.path;
-    } else {
-      const sp = shortestPathOnGraph(v.path[0], v.path[1]);
-      route = sp && sp.length >= 2 ? sp : v.path;
-    }
-    const pos = pointAlongPolyline(route, t);
-    if (pos) return pos;
-  }
-
-  const node = nodeById.get(v.currentNodeId);
-  return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
 }
 
 // // Color by wait-time severity vs threshold (0..1) – disabled
@@ -507,7 +405,7 @@ export default function NetworkMap({
           </defs>
 
           {/* Base links */}
-          {links.filter((_, i) => i % 2 === 0).map(link => {
+          {undirectedLinks.map(link => {
             const from = nodeById.get(link.from);
             const to = nodeById.get(link.to);
             if (!from || !to) return null;
@@ -628,7 +526,7 @@ export default function NetworkMap({
 
           {/* Vehicles */}
           {vehicles.map(v => {
-            const pos = getVehiclePosition(v);
+            const pos = vehiclePosition(v);
             const hidden = inAnalysis && analysisVehicleId != null && v.id !== analysisVehicleId;
             const dimmed = inAnalysis && analysisVehicleId == null && false; // reserved
             const isFocusedVehicle = focusedVehicleId != null && v.id === focusedVehicleId;
