@@ -2627,6 +2627,8 @@
 .vehicle-pattern-row {
   position: relative;
   min-width: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 330px;
   display: flex;
   flex-direction: column;
   gap: 7px;

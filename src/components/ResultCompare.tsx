@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import NetworkMap from './NetworkMap';
 import CancellationContextMap from './CancellationContextMap';
 import VehicleOperationMap, { type OperationHeatStatus } from './VehicleOperationMap';
@@ -10,7 +10,7 @@ import { RESULT_A_COLOR, RESULT_B_COLOR } from '../config';
 import type { SimulationMetrics, SimulationState, VehiclePatternSelection } from '../types/simulation';
 import { formatSimTime } from '../utils/time';
 import { frameAtOrBefore, framesBetween } from '../utils/replay';
-import { loadReplayFile, type LoadedReplay } from '../utils/replayPayload';
+import { loadReplayFile, type LoadedReplay } from '../utils/replayFileLoader';
 
 type ReplaySide = 'left' | 'right';
 
@@ -552,10 +552,12 @@ export default function ResultCompare() {
   const leftTemporalSource = useMemo(() => leftReplay ? {
     frames: leftReplay.frames,
     passengerEvents: leftReplay.passengerEvents,
+    temporalIndex: leftReplay.temporalIndex,
   } : null, [leftReplay]);
   const rightTemporalSource = useMemo(() => rightReplay ? {
     frames: rightReplay.frames,
     passengerEvents: rightReplay.passengerEvents,
+    temporalIndex: rightReplay.temporalIndex,
   } : null, [rightReplay]);
 
   const loadFile = useCallback(async (side: ReplaySide, file: File) => {
@@ -568,20 +570,22 @@ export default function ResultCompare() {
     try {
       const parsed = await loadReplayFile(file);
       if (loadId !== fileLoadIdsRef.current[side]) return;
-      setReplay(parsed);
-      setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
-      setCancellationContexts(previous => ({ ...previous, [side]: null }));
       cancellationReturnTimesRef.current[side] = null;
       const nextLeftReplay = side === 'left' ? parsed : leftReplay;
       const nextRightReplay = side === 'right' ? parsed : rightReplay;
-      setReplayTimes(prev => ({
-        ...(isReplayTimeSynced
-          ? syncedReplayTimes(nextLeftReplay, nextRightReplay, parsed.timeMax)
-          : {
-            left: side === 'left' ? parsed.timeMax : leftReplay?.timeMax ?? prev.left,
-            right: side === 'right' ? parsed.timeMax : rightReplay?.timeMax ?? prev.right,
-          }),
-      }));
+      startTransition(() => {
+        setReplay(parsed);
+        setSelectedVehicleSegments(previous => ({ ...previous, [side]: null }));
+        setCancellationContexts(previous => ({ ...previous, [side]: null }));
+        setReplayTimes(prev => ({
+          ...(isReplayTimeSynced
+            ? syncedReplayTimes(nextLeftReplay, nextRightReplay, parsed.timeMax)
+            : {
+              left: side === 'left' ? parsed.timeMax : leftReplay?.timeMax ?? prev.left,
+              right: side === 'right' ? parsed.timeMax : rightReplay?.timeMax ?? prev.right,
+            }),
+        }));
+      });
     } catch (error) {
       if (loadId !== fileLoadIdsRef.current[side]) return;
       setError(error instanceof Error ? error.message : 'Failed to load replay file.');
@@ -593,17 +597,17 @@ export default function ResultCompare() {
   }, [canSyncReplayTimes]);
 
   useEffect(() => {
-    setReplayTimes(prev => ({
-      ...prev,
-      left: clampReplayTime(leftReplay, prev.left),
-    }));
+    setReplayTimes(prev => {
+      const left = clampReplayTime(leftReplay, prev.left);
+      return left === prev.left ? prev : { ...prev, left };
+    });
   }, [leftReplay]);
 
   useEffect(() => {
-    setReplayTimes(prev => ({
-      ...prev,
-      right: clampReplayTime(rightReplay, prev.right),
-    }));
+    setReplayTimes(prev => {
+      const right = clampReplayTime(rightReplay, prev.right);
+      return right === prev.right ? prev : { ...prev, right };
+    });
   }, [rightReplay]);
 
   const handleReplayTimeChange = useCallback((side: ReplaySide, time: number) => {

@@ -367,8 +367,10 @@ export default function VehicleOperationMap({
     ],
   );
   const statusTotals = useMemo(
-    () => buildFilterStatusTotals(frames, rangeStart, currentTime, focusVehicleId),
-    [frames, rangeStart, currentTime, focusVehicleId],
+    () => activeMode === 'time-presence'
+      ? buildFilterStatusTotals(frames, rangeStart, currentTime, focusVehicleId)
+      : emptyStatusCounts(),
+    [activeMode, frames, rangeStart, currentTime, focusVehicleId],
   );
   const pathEdges = useMemo(
     () => activeMode === 'time-presence'

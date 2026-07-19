@@ -5,10 +5,12 @@ import type {
   SimulationState,
 } from '../types/simulation';
 import {
+  buildReplayVehicleTemporalIndex,
   encodePassengerEvents,
   orderedUniqueFrames,
   sortPassengerEvents,
 } from './vehicleTemporal';
+import type { ReplayVehicleTemporalIndex } from './vehicleTemporal';
 
 export interface LoadedReplay {
   name: string;
@@ -20,6 +22,7 @@ export interface LoadedReplay {
   passengerEvents: ReplayPassengerEvent[];
   vehicleMovements: ReplayVehicleMovement[];
   dispatchDecisions: ReplayDispatchDecision[];
+  temporalIndex: ReplayVehicleTemporalIndex;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -472,8 +475,12 @@ export function parseReplayPayload(payload: unknown, fileName: string): LoadedRe
       left.decisionRound - right.decisionRound ||
       left.vehicleId - right.vehicleId,
   );
-  const vehicleIds = new Set(frames.flatMap(frame => frame.vehicles.map(vehicle => vehicle.id)));
-  const passengerIds = new Set(frames.flatMap(frame => frame.passengers.map(passenger => passenger.id)));
+  const vehicleIds = new Set<number>();
+  const passengerIds = new Set<number>();
+  for (const frame of frames) {
+    for (const vehicle of frame.vehicles) vehicleIds.add(vehicle.id);
+    for (const passenger of frame.passengers) passengerIds.add(passenger.id);
+  }
   if (passengerEvents.some(event =>
     !vehicleIds.has(event.vehicleId) || !passengerIds.has(event.passengerId)
   )) {
@@ -519,6 +526,10 @@ export function parseReplayPayload(payload: unknown, fileName: string): LoadedRe
   if (dispatchDecisionKeys.size !== dispatchDecisions.length) {
     throw new Error('Replay dispatchDecisions contain duplicate vehicle decisions.');
   }
+  const temporalIndex = buildReplayVehicleTemporalIndex(
+    frames,
+    passengerEvents,
+  );
 
   return {
     name: fileName,
@@ -530,22 +541,17 @@ export function parseReplayPayload(payload: unknown, fileName: string): LoadedRe
     passengerEvents,
     vehicleMovements,
     dispatchDecisions,
+    temporalIndex,
   };
 }
 
-export async function loadReplayFile(file: File): Promise<LoadedReplay> {
-  let text: string;
-  try {
-    text = await file.text();
-  } catch {
-    throw new Error('Failed to read replay file.');
-  }
-
+export function parseReplayText(text: string, fileName: string): LoadedReplay {
   let payload: unknown;
   try {
     payload = JSON.parse(text);
   } catch {
     throw new Error('The selected file is not valid JSON.');
   }
-  return parseReplayPayload(payload, file.name);
+
+  return parseReplayPayload(payload, fileName);
 }

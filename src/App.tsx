@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, memo, Suspense, type ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { useWebSocketSimulation } from './hooks/useWebSocketSimulation';
 import { useSimulationHistory } from './hooks/useSimulationHistory';
@@ -20,8 +20,17 @@ import './App.css';
 
 type AppTab = 'dashboard' | 'compare' | 'analysis';
 
-const ResultCompare = memo(lazy(() => import('./components/ResultCompare')));
-const ResultAnalysis = memo(lazy(() => import('./components/ResultAnalysis')));
+const loadResultCompare = () => import('./components/ResultCompare');
+const loadResultAnalysis = () => import('./components/ResultAnalysis');
+const ResultCompare = memo(lazy(loadResultCompare));
+const ResultAnalysis = memo(lazy(loadResultAnalysis));
+
+const FrozenWhenInactive = memo(
+  function FrozenWhenInactive({ children }: { active: boolean; children: ReactNode }) {
+    return children;
+  },
+  (previous, next) => !previous.active && !next.active,
+);
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
@@ -161,6 +170,19 @@ export default function App() {
     return () => document.body.classList.remove('is-result-analysis-view');
   }, [activeTab]);
 
+  useEffect(() => {
+    const preloadResultTabs = () => {
+      void loadResultCompare();
+      void loadResultAnalysis();
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(preloadResultTabs, { timeout: 2000 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+    const timeoutId = window.setTimeout(preloadResultTabs, 750);
+    return () => window.clearTimeout(timeoutId);
+  }, []);
+
   return (
     <div className={`app${activeTab === 'analysis' ? ' is-result-analysis' : ''}`}>
       <nav className="app-tabs" aria-label="Dashboard sections">
@@ -175,6 +197,8 @@ export default function App() {
           type="button"
           className={`app-tab${activeTab === 'compare' ? ' is-active' : ''}`}
           onClick={() => handleTabChange('compare')}
+          onFocus={() => void loadResultCompare()}
+          onMouseEnter={() => void loadResultCompare()}
         >
           Result Compare
         </button>
@@ -182,6 +206,8 @@ export default function App() {
           type="button"
           className={`app-tab${activeTab === 'analysis' ? ' is-active' : ''}`}
           onClick={() => handleTabChange('analysis')}
+          onFocus={() => void loadResultAnalysis()}
+          onMouseEnter={() => void loadResultAnalysis()}
         >
           Result Analysis
         </button>
@@ -191,7 +217,8 @@ export default function App() {
         className={`app-tab-panel${activeTab === 'dashboard' ? ' is-active' : ''}`}
         aria-hidden={activeTab !== 'dashboard'}
       >
-        <div className="dashboard-layout">
+        <FrozenWhenInactive active={activeTab === 'dashboard'}>
+          <div className="dashboard-layout">
         <div className="dashboard-layout-left">
           <div className="dashboard-left-top">
             <div className="dashboard-left-top-row">
@@ -296,7 +323,8 @@ export default function App() {
             </>
           )}
         </aside>
-        </div>
+          </div>
+        </FrozenWhenInactive>
       </section>
       <section
         className={`app-tab-panel${activeTab === 'compare' ? ' is-active' : ''}`}

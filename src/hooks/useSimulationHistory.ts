@@ -247,27 +247,15 @@ export function useSimulationHistory() {
     return () => clearInterval(id);
   }, [isReplaying, timeRange.max]);
 
-  const analysis = useMemo((): VehicleAnalysis | null => {
+  const analysisBase = useMemo(() => {
     if (analysisVehicleId == null || framesRef.current.length === 0) return null;
 
     const frames = orderedUniqueFrames(framesRef.current);
     if (frames.length === 0) return null;
 
-    const firstFrame = frames[0];
     const vid = analysisVehicleId;
-    const replayFrame = frameAtOrBefore(frames, replayTime) ?? firstFrame;
-    const replayFrames = frames.filter(
-      frame => frame.metrics.currentTime <= replayFrame.metrics.currentTime,
-    );
-    const replayFramesForAnalysis = replayFrames.length > 0 ? replayFrames : [replayFrame];
     // --- Collect all passengers ever assigned to this vehicle ---
     const assignedPassengers = latestPassengersEverAssignedToVehicle(frames, vid);
-
-    // --- Route edges & traversal counts (directional) ---
-    const edgeTraversals = collectEdgeTraversals(replayFramesForAnalysis, vid);
-
-    // --- Node activity (pickup / dropoff counts for this vehicle) ---
-    // Activity ring is disabled, so its unused aggregate is not computed.
 
     // --- Wait time data ---
     const waitTimeData: WaitTimeBarDatum[] = [];
@@ -306,6 +294,41 @@ export function useSimulationHistory() {
     // --- Timeline and status share data ---
     const timelineData: VehicleTimelineDatum[] = buildVehicleTimelineData(frames, vid);
     const passengerLoadData = buildVehiclePassengerLoadData(frames, vid);
+
+    return {
+      frames,
+      vid,
+      assignedPassengers,
+      waitTimeData,
+      detourFactorData,
+      timelineData,
+      passengerLoadData,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisVehicleId, frameCount]);
+
+  const analysis = useMemo((): VehicleAnalysis | null => {
+    if (!analysisBase) return null;
+
+    const {
+      frames,
+      vid,
+      assignedPassengers,
+      waitTimeData,
+      detourFactorData,
+      timelineData,
+      passengerLoadData,
+    } = analysisBase;
+    const firstFrame = frames[0];
+    const replayFrame = frameAtOrBefore(frames, replayTime) ?? firstFrame;
+    const replayFrameIndex = frames.indexOf(replayFrame);
+    const replayFramesForAnalysis = frames.slice(0, replayFrameIndex + 1);
+
+    // --- Route edges & traversal counts (directional) ---
+    const edgeTraversals = collectEdgeTraversals(replayFramesForAnalysis, vid);
+
+    // --- Node activity (pickup / dropoff counts for this vehicle) ---
+    // Activity ring is disabled, so its unused aggregate is not computed.
 
     const replayStatusShare = calculateStatusShare(timelineData, replayTime);
 
@@ -377,8 +400,7 @@ export function useSimulationHistory() {
       timelineData,
       passengerLoadData,
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisVehicleId, frameCount, replayTime]);
+  }, [analysisBase, replayTime]);
 
   return {
     addFrame,

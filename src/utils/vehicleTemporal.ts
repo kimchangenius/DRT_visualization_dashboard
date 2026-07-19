@@ -8,7 +8,34 @@ import type {
   VehicleTimelineDatum,
 } from '../types/simulation';
 
+export interface ReplayVehicleTemporalData {
+  timelineData: VehicleTimelineDatum[];
+  passengerLoadData: VehiclePassengerLoadDatum[];
+  passengerEvents: ReplayPassengerEvent[];
+  eventGroupCount: number;
+}
+
+export interface ReplayVehicleTemporalIndex {
+  vehicleIds: number[];
+  frameTimes: number[];
+  maxRequestIdDigits: number;
+  maxEventGroupCount: number;
+  byVehicleId: Record<number, ReplayVehicleTemporalData>;
+}
+
 export function orderedUniqueFrames(frames: SimulationState[]): SimulationState[] {
+  let isStrictlyOrdered = true;
+  for (let index = 1; index < frames.length; index += 1) {
+    if (
+      frames[index - 1].metrics.currentTime >=
+      frames[index].metrics.currentTime
+    ) {
+      isStrictlyOrdered = false;
+      break;
+    }
+  }
+  if (isStrictlyOrdered) return frames;
+
   const framesByTime = new Map<number, SimulationState>();
   for (const frame of frames) {
     framesByTime.set(frame.metrics.currentTime, frame);
@@ -274,4 +301,59 @@ export function latestPassengersEverAssignedToVehicle(
   return [...latestPassengers.values()].sort(
     (a, b) => a.requestTime - b.requestTime || a.id - b.id,
   );
+}
+
+export function buildReplayVehicleTemporalIndex(
+  frames: SimulationState[],
+  passengerEvents: ReplayPassengerEvent[],
+): ReplayVehicleTemporalIndex {
+  const orderedFrames = orderedUniqueFrames(frames);
+  const vehicleIds = new Set<number>();
+  for (const frame of orderedFrames) {
+    for (const vehicle of frame.vehicles) vehicleIds.add(vehicle.id);
+  }
+
+  const eventsByVehicleId = new Map<number, ReplayPassengerEvent[]>();
+  let maxRequestIdDigits = 1;
+  for (const event of passengerEvents) {
+    vehicleIds.add(event.vehicleId);
+    maxRequestIdDigits = Math.max(
+      maxRequestIdDigits,
+      String(event.passengerId).length,
+    );
+    const vehicleEvents = eventsByVehicleId.get(event.vehicleId) ?? [];
+    vehicleEvents.push(event);
+    eventsByVehicleId.set(event.vehicleId, vehicleEvents);
+  }
+
+  const sortedVehicleIds = [...vehicleIds].sort((a, b) => a - b);
+  const byVehicleId: Record<number, ReplayVehicleTemporalData> = {};
+  let maxEventGroupCount = 1;
+  for (const vehicleId of sortedVehicleIds) {
+    const vehicleEvents = sortPassengerEvents(
+      eventsByVehicleId.get(vehicleId) ?? [],
+    );
+    const eventGroupCount = new Set(
+      vehicleEvents.map(event => event.time),
+    ).size;
+    maxEventGroupCount = Math.max(maxEventGroupCount, eventGroupCount);
+    byVehicleId[vehicleId] = {
+      timelineData: buildVehicleTimelineData(orderedFrames, vehicleId),
+      passengerLoadData: buildVehiclePassengerLoadData(
+        orderedFrames,
+        vehicleId,
+        vehicleEvents,
+      ),
+      passengerEvents: vehicleEvents,
+      eventGroupCount,
+    };
+  }
+
+  return {
+    vehicleIds: sortedVehicleIds,
+    frameTimes: orderedFrames.map(frame => frame.metrics.currentTime),
+    maxRequestIdDigits,
+    maxEventGroupCount,
+    byVehicleId,
+  };
 }

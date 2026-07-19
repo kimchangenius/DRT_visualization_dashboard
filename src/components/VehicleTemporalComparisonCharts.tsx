@@ -23,11 +23,13 @@ import {
   buildVehicleTimelineData,
   inferVehicleTimelineStatus,
   passengerUnitCount,
+  type ReplayVehicleTemporalIndex,
 } from '../utils/vehicleTemporal';
 
 export interface ReplayVehicleSource {
   frames: SimulationState[];
   passengerEvents?: ReplayPassengerEvent[];
+  temporalIndex?: ReplayVehicleTemporalIndex;
 }
 
 interface VehicleTemporalComparisonChartsProps {
@@ -81,11 +83,14 @@ function vehicleIdsForSources(
   resultB: ReplayVehicleSource | null,
 ): number[] {
   const ids = new Set<number>(DEFAULT_VEHICLE_IDS);
-  for (const frame of resultA?.frames ?? []) {
-    for (const vehicle of frame.vehicles) ids.add(vehicle.id);
-  }
-  for (const frame of resultB?.frames ?? []) {
-    for (const vehicle of frame.vehicles) ids.add(vehicle.id);
+  for (const source of [resultA, resultB]) {
+    if (source?.temporalIndex) {
+      for (const vehicleId of source.temporalIndex.vehicleIds) ids.add(vehicleId);
+      continue;
+    }
+    for (const frame of source?.frames ?? []) {
+      for (const vehicle of frame.vehicles) ids.add(vehicle.id);
+    }
   }
   return Array.from(ids).sort((a, b) => a - b);
 }
@@ -94,6 +99,10 @@ function buildPassengerEventData(
   source: ReplayVehicleSource | null,
   vehicleId: number,
 ): PassengerEventDatum[] {
+  const vehicleEvents = source?.temporalIndex?.byVehicleId[vehicleId]?.passengerEvents ??
+    (source?.passengerEvents ?? []).filter(
+      event => event.vehicleId === vehicleId,
+    );
   const eventsByTime = new Map<number, PassengerEventDatum>();
   const eventAt = (time: number) => {
     const existing = eventsByTime.get(time);
@@ -108,8 +117,7 @@ function buildPassengerEventData(
     return event;
   };
 
-  for (const encodedEvent of source?.passengerEvents ?? []) {
-    if (encodedEvent.vehicleId !== vehicleId) continue;
+  for (const encodedEvent of vehicleEvents) {
     const event = eventAt(encodedEvent.time);
     if (encodedEvent.type === 'pickup') {
       event.pickupPassengers += encodedEvent.passengerCount;
@@ -131,6 +139,9 @@ function passengerEventGroupCount(
   source: ReplayVehicleSource | null,
   vehicleId: number,
 ): number {
+  const indexedCount = source?.temporalIndex?.byVehicleId[vehicleId]?.eventGroupCount;
+  if (indexedCount != null) return indexedCount;
+
   return new Set(
     (source?.passengerEvents ?? [])
       .filter(event => event.vehicleId === vehicleId)
@@ -942,6 +953,7 @@ function VehiclePatternRow({
   const [eventSequenceScrollLeft, setEventSequenceScrollLeft] = useState(0);
   const panStartRef = useRef<{ x: number; domain: TimelineDomain } | null>(null);
   const selectionStartRef = useRef<number | null>(null);
+  const temporalData = source?.temporalIndex?.byVehicleId[vehicleId];
   const frame = useMemo(
     () => source ? frameAtOrBefore(source.frames, currentTime) : null,
     [currentTime, source],
@@ -951,16 +963,18 @@ function VehiclePatternRow({
     [currentTime, source, vehicleId],
   );
   const segments = useMemo(
-    () => buildVehicleTimelineData(source?.frames ?? [], vehicleId),
-    [source, vehicleId],
+    () => temporalData?.timelineData ??
+      buildVehicleTimelineData(source?.frames ?? [], vehicleId),
+    [source, temporalData, vehicleId],
   );
   const passengerLoadData = useMemo(
-    () => buildVehiclePassengerLoadData(
-      source?.frames ?? [],
-      vehicleId,
-      source?.passengerEvents,
-    ),
-    [source, vehicleId],
+    () => temporalData?.passengerLoadData ??
+      buildVehiclePassengerLoadData(
+        source?.frames ?? [],
+        vehicleId,
+        source?.passengerEvents,
+      ),
+    [source, temporalData, vehicleId],
   );
   const passengerEventData = useMemo(
     () => buildPassengerEventData(source, vehicleId),
@@ -969,9 +983,10 @@ function VehiclePatternRow({
   const canInteract = segments.length > 0 && fullDomain[1] > fullDomain[0];
   const activeDomain = clampDomain(zoomDomain ?? fullDomain, fullDomain);
   const replayFrameTimes = useMemo(
-    () => Array.from(new Set(
-      (source?.frames ?? []).map(sourceFrame => sourceFrame.metrics.currentTime),
-    )).sort((a, b) => a - b),
+    () => source?.temporalIndex?.frameTimes ??
+      Array.from(new Set(
+        (source?.frames ?? []).map(sourceFrame => sourceFrame.metrics.currentTime),
+      )).sort((a, b) => a - b),
     [source],
   );
   const selectableFrameTimes = useMemo(
@@ -1222,10 +1237,11 @@ function ResultVehicleCard({
   const focusReturnScrollTopRef = useRef<number | null>(null);
   const previousDecisionFocusRef = useRef<ReplayDispatchDecision | null>(null);
   const maxRequestIdDigits = useMemo(
-    () => Math.max(
-      1,
-      ...(source?.passengerEvents ?? []).map(event => String(event.passengerId).length),
-    ),
+    () => source?.temporalIndex?.maxRequestIdDigits ??
+      Math.max(
+        1,
+        ...(source?.passengerEvents ?? []).map(event => String(event.passengerId).length),
+      ),
     [source],
   );
   const eventBoxWidth = Math.max(36, Math.min(64, 18 + maxRequestIdDigits * 7));

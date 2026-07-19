@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { startTransition, useCallback, useMemo, useRef, useState } from 'react';
 
 import DemandNetworkMap, { type CancellationAnalysisContext } from './DemandNetworkMap';
 import CancellationContextMap from './CancellationContextMap';
@@ -10,7 +10,7 @@ import type {
   VehiclePatternSelection,
 } from '../types/simulation';
 import { frameAtOrBefore } from '../utils/replay';
-import { loadReplayFile, type LoadedReplay } from '../utils/replayPayload';
+import { loadReplayFile, type LoadedReplay } from '../utils/replayFileLoader';
 
 const DEFAULT_STATUS_VISIBILITY: Record<OperationHeatStatus, boolean> = {
   picking_up: true,
@@ -18,11 +18,7 @@ const DEFAULT_STATUS_VISIBILITY: Record<OperationHeatStatus, boolean> = {
 };
 
 function replayVehicleIds(replay: LoadedReplay | null): number[] {
-  const ids = new Set<number>();
-  for (const frame of replay?.frames ?? []) {
-    for (const vehicle of frame.vehicles) ids.add(vehicle.id);
-  }
-  return [...ids].sort((a, b) => a - b);
+  return replay?.temporalIndex.vehicleIds ?? [];
 }
 
 function dispatchDecisionLabel(decision: ReplayDispatchDecision): string {
@@ -59,6 +55,7 @@ export default function ResultAnalysis() {
   const vehiclePatternSource = useMemo(() => replay ? {
     frames: replay.frames,
     passengerEvents: replay.passengerEvents,
+    temporalIndex: replay.temporalIndex,
   } : null, [replay]);
 
   const handleFile = useCallback(async (file: File) => {
@@ -68,12 +65,14 @@ export default function ResultAnalysis() {
     try {
       const parsed = await loadReplayFile(file);
       if (loadId !== fileLoadIdRef.current) return;
-      setReplay(parsed);
-      setCurrentTime(parsed.timeMax);
-      setSelectedSegment(null);
-      setCancellationContext(null);
-      setDispatchDecisionFocus(null);
       cancellationReturnTimeRef.current = null;
+      startTransition(() => {
+        setReplay(parsed);
+        setCurrentTime(parsed.timeMax);
+        setSelectedSegment(null);
+        setCancellationContext(null);
+        setDispatchDecisionFocus(null);
+      });
     } catch (error) {
       if (loadId !== fileLoadIdRef.current) return;
       setLoadError(error instanceof Error ? error.message : 'Failed to load replay file.');
