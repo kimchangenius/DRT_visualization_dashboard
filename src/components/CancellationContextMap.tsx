@@ -106,6 +106,9 @@ export default function CancellationContextMap({
         : decisionRequest.originNodeId,
     ) ?? null
     : null;
+  const decisionTargetSize = dispatchDecisionFocus?.actionType === 'dropoff'
+    ? OTHER_REQUEST_SIZE
+    : 14;
 
   return (
     <div className={`cancellation-context-map${appearance === 'paper' ? ' is-paper' : ''}`}>
@@ -183,10 +186,10 @@ export default function CancellationContextMap({
           {decisionTargetNode && decisionRequest && dispatchDecisionFocus ? (
             <g className={`cancellation-context-decision-target is-${dispatchDecisionFocus.actionType}`}>
               <rect
-                x={decisionTargetNode.x - 7}
-                y={decisionTargetNode.y - 7}
-                width="14"
-                height="14"
+                x={decisionTargetNode.x - decisionTargetSize / 2}
+                y={decisionTargetNode.y - decisionTargetSize / 2}
+                width={decisionTargetSize}
+                height={decisionTargetSize}
               >
                 <title>
                   {`${dispatchDecisionFocus.actionType === 'pickup' ? 'Pickup origin' : 'Drop-off destination'} for R${decisionRequest.id}`}
@@ -213,15 +216,8 @@ export default function CancellationContextMap({
                 key={vehicle.id}
                 className={`cancellation-context-vehicle${isFocused ? ' is-decision-focus' : ''}`}
               >
-                {isFocused ? (
-                  <circle
-                    className="cancellation-context-vehicle-focus-ring"
-                    cx={position.x}
-                    cy={position.y}
-                    r={9}
-                  />
-                ) : null}
                 <circle
+                  className="cancellation-context-vehicle-marker"
                   cx={position.x}
                   cy={position.y}
                   r={6.5}
