@@ -13,7 +13,7 @@ export interface NetworkLink {
   freeFlowTime: number;
 }
 
-export type VehicleStatus = 'idle' | 'picking_up' | 'carrying' | 'repositioning';
+export type VehicleStatus = 'idle' | 'picking_up' | 'carrying';
 
 export interface Vehicle {
   id: number;
@@ -223,6 +223,7 @@ export interface VehicleTimelineDatum {
   startTime: number;
   endTime: number;
   status: VehicleStatus;
+  passengerCount?: number;
   hasPassengerEvent?: boolean;
 }
 

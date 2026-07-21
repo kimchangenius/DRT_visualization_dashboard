@@ -103,7 +103,7 @@ function calculateStatusShare(timelineData: VehicleTimelineDatum[], replayTime: 
       segment => segment.startTime <= clampedReplayTime && segment.endTime >= clampedReplayTime,
     );
     return {
-      idlePct: !activeSegment || activeSegment.status === 'idle' || activeSegment.status === 'repositioning' ? 100 : 0,
+      idlePct: !activeSegment || activeSegment.status === 'idle' ? 100 : 0,
       pickupPct: activeSegment?.status === 'picking_up' ? 100 : 0,
       carryingPct: activeSegment?.status === 'carrying' ? 100 : 0,
     };

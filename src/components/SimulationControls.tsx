@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { VEHICLE_STATUS_COLORS } from '../config';
 import type { DemandScenario, Vehicle, Passenger, VehicleAnalysisSummary } from '../types/simulation';
 import { formatSimTime } from '../utils/time';
 import { passengerUnitCount } from '../utils/vehicleTemporal';
@@ -72,7 +73,6 @@ const VEHICLE_STATUS_LABELS: Record<Vehicle['status'], string> = {
   idle: 'Idle',
   picking_up: 'Picking up',
   carrying: 'Carrying',
-  repositioning: 'Repositioning',
 };
 
 function VehicleStatusCard({ vehicle, passengers }: { vehicle: Vehicle; passengers: Passenger[] }) {
@@ -491,7 +491,7 @@ export default function SimulationControls({
                       </div>
                       <div className="stat-item">
                         <span className="stat-label">Carrying Share</span>
-                        <span className="stat-value" style={{ color: '#10b981' }}>
+                        <span className="stat-value" style={{ color: VEHICLE_STATUS_COLORS.carrying }}>
                           {analysisSummary.carryingPct}%
                         </span>
                       </div>

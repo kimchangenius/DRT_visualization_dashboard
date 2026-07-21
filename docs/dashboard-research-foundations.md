@@ -123,10 +123,8 @@ edge 자체 길이로 오해될 수 있고, `VMT`는 mile 단위를 전제하므
    저장한다. 예: `mile`, 또는 `meter`와 변환 규칙.
 3. 모든 차량 이동을 포함한다. 현재 서버 모델에는 이동하는 상태가 pickup과
    dropoff뿐이므로 현재 합계는 이 모델의 전체 차량 이동 거리와 같다.
-4. 향후 cruising/repositioning이 추가되면 해당 이동도 Replay와 총 VMT에
-   포함해야 한다. 제외하면 operational VMT가 과소 계산된다.
-5. 승객 수를 VMT에 곱하지 않는다. 승객 수를 반영하려면 별도 PMT를 계산한다.
-6. 한 번의 시뮬레이션 결과에 임의로 `365`를 곱하지 않는다. 해당 실행이
+4. 승객 수를 VMT에 곱하지 않는다. 승객 수를 반영하려면 별도 PMT를 계산한다.
+5. 한 번의 시뮬레이션 결과에 임의로 `365`를 곱하지 않는다. 해당 실행이
    평균 일일 운행을 대표한다는 실험 설계가 있을 때만 연간 환산한다.
 
 ### 현재 상태 분해의 교통학적 해석
@@ -247,7 +245,8 @@ Traversals 지도에서는 B가 더 강하게 나타난다. 전자는 가중 운
    scenarios. Transportation Research Part C, 40, 1-13.**
    [DOI](https://doi.org/10.1016/j.trc.2013.12.001)
    - SAV 시뮬레이션에서 빈 차 재배치가 전체 주행거리를 증가시킬 수 있음을 보인다.
-   - 프로젝트 적용: repositioning 도입 시 총 VDT/VMT에서 제외하면 안 된다는 근거.
+   - 프로젝트 적용: 빈 차 이동을 별도로 인코딩하는 모델에서는 총 VDT/VMT에
+     포함해야 한다는 근거.
 
 4. **Spieser, K., Treleaven, K., Zhang, R., Frazzoli, E., Morton, D., &
    Pavone, M. (2014). Toward a Systematic Approach to the Design and
@@ -393,6 +392,4 @@ Traversals 지도에서는 B가 더 강하게 나타난다. 전자는 가중 운
    Result Analysis의 동일한 시간 구간에 대해 계산한다.
 4. movement별 onboard count를 인코딩해 empty/occupied VDT, PMT,
    distance-weighted occupancy를 추가한다.
-5. repositioning/cruising이 모델에 생기면 별도 movement type과 VMT 구성요소로
-   추가한다.
-6. S1/S3 비교 시 두 결과에 공통 거리 범례 최댓값을 적용해 시각 비교를 보장한다.
+5. S1/S3 비교 시 두 결과에 공통 거리 범례 최댓값을 적용해 시각 비교를 보장한다.

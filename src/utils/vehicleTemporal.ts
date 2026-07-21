@@ -100,7 +100,7 @@ export function inferVehicleTimelineStatus(
   vehicleId: number,
   fallbackStatus: VehicleStatus,
 ): VehicleStatus {
-  if (fallbackStatus !== 'idle' && fallbackStatus !== 'repositioning') {
+  if (fallbackStatus !== 'idle') {
     return fallbackStatus;
   }
 
@@ -250,23 +250,39 @@ export function buildVehicleTimelineData(
 
     const time = frame.metrics.currentTime;
     const status = inferVehicleTimelineStatus(frame, vehicleId, vehicle.status);
-    const passengerSignature = onboardPassengerSignature(
-      onboardPassengersForVehicle(frame, vehicleId),
-    );
+    const onboardPassengers = onboardPassengersForVehicle(frame, vehicleId);
+    const passengerSignature = onboardPassengerSignature(onboardPassengers);
+    const passengerCount = status === 'picking_up'
+      ? frame.passengers.reduce((total, passenger) => (
+        passenger.assignedVehicleId === vehicleId &&
+        passenger.status !== 'cancelled' &&
+        passenger.requestTime <= time &&
+        (passenger.deliveryTime == null || passenger.deliveryTime > time)
+          ? total + passengerUnitCount(passenger)
+          : total
+      ), 0)
+      : status === 'carrying'
+        ? vehicleOnboardPassengerCount(vehicle, onboardPassengers)
+        : 0;
     if (!active) {
       activePassengerSignature = passengerSignature;
-      active = { startTime: time, endTime: time, status };
+      active = { startTime: time, endTime: time, status, passengerCount };
       segments.push(active);
       continue;
     }
 
     const hasPassengerEvent = activePassengerSignature !== passengerSignature;
-    if (active.status !== status || hasPassengerEvent) {
+    if (
+      active.status !== status ||
+      active.passengerCount !== passengerCount ||
+      hasPassengerEvent
+    ) {
       active.endTime = Math.max(active.endTime, time);
       active = {
         startTime: time,
         endTime: time,
         status,
+        passengerCount,
         hasPassengerEvent,
       };
       activePassengerSignature = passengerSignature;

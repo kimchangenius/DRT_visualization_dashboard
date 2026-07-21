@@ -67,7 +67,7 @@ const GRID_SIZE = 12;
 const MIN_DISTANCE_STROKE_WIDTH = 1.15;
 const DISTANCE_STROKE_RANGE = 5.1;
 const EDGE_USAGE_LEGEND_LEVELS = [
-  { label: 'Low', ratio: 0.1 },
+  { label: 'Low', ratio: 0.25 },
   { label: 'Medium', ratio: 0.5 },
   { label: 'High', ratio: 1 },
 ] as const;
@@ -90,22 +90,6 @@ function formatNetworkDistance(distance: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: distance < 1 ? 2 : 1,
   });
-}
-
-function niceDistanceScaleMaximum(maximum: number): number {
-  if (!Number.isFinite(maximum) || maximum <= 0) return 0;
-  const magnitude = 10 ** Math.floor(Math.log10(maximum));
-  const normalized = maximum / magnitude;
-  const multiplier = normalized <= 1
-    ? 1
-    : normalized <= 2
-      ? 2
-      : normalized <= 2.5
-        ? 2.5
-        : normalized <= 5
-          ? 5
-          : 10;
-  return multiplier * magnitude;
 }
 
 function distanceStrokeWidth(distance: number, scaleMaximum: number): number {
@@ -418,14 +402,16 @@ export default function VehicleOperationMap({
         .map(edge => edge.key),
     );
   }, [activeMode, distanceFlow.edges, visibleStatuses]);
-  const distanceScaleMaximum = useMemo(
-    () => niceDistanceScaleMaximum(Math.max(
+  const visibleDistanceMaximum = useMemo(
+    () => Math.max(
       0,
-      ...distanceFlow.edges.flatMap(edge =>
-        FILTERABLE_STATUSES.map(status => edge.statusDistances[status]),
+      ...visibleDistanceEdges.flatMap(edge =>
+        FILTERABLE_STATUSES
+          .filter(status => visibleStatuses[status])
+          .map(status => edge.statusDistances[status]),
       ),
-    )),
-    [distanceFlow.edges],
+    ),
+    [visibleDistanceEdges, visibleStatuses],
   );
   const kde = useMemo(() => {
     if (activeMode !== 'time-presence') {
@@ -557,7 +543,7 @@ export default function VehicleOperationMap({
                 {visibleDistanceEdges.flatMap(edge => {
                   const from = nodeMap.get(edge.fromNodeId);
                   const to = nodeMap.get(edge.toNodeId);
-                  if (!from || !to || distanceScaleMaximum <= 0) return [];
+                  if (!from || !to || visibleDistanceMaximum <= 0) return [];
                   const hasBothStatuses = FILTERABLE_STATUSES.every(status =>
                     visibleStatuses[status] && edge.statusDistances[status] > 0,
                   );
@@ -571,7 +557,7 @@ export default function VehicleOperationMap({
                     const coordinates = offsetLine(from, to, offset);
                     const strokeWidth = distanceStrokeWidth(
                       distance,
-                      distanceScaleMaximum,
+                      visibleDistanceMaximum,
                     );
                     return [
                       <line
@@ -714,14 +700,14 @@ export default function VehicleOperationMap({
           {activeMode === 'distance-flow' ? (
             <div
               className="vehicle-operation-distance-legend"
-              aria-label="Weighted Edge Usage line-width scale: thicker edges indicate greater accumulated weighted usage"
-              title="Thicker edges indicate greater accumulated weighted usage"
+              aria-label={`Weighted Edge Usage line-width scale for the current interval; maximum ${formatNetworkDistance(visibleDistanceMaximum)}`}
+              title="Values and line widths are normalized to the maximum visible edge usage in the current interval"
             >
               <span className="vehicle-operation-distance-legend-title">
                 Weighted Edge Usage
               </span>
               <span className="vehicle-operation-distance-legend-samples">
-                {distanceScaleMaximum > 0
+                {visibleDistanceMaximum > 0
                   ? EDGE_USAGE_LEGEND_LEVELS.map(level => (
                     <span
                       key={level.label}
@@ -731,12 +717,15 @@ export default function VehicleOperationMap({
                         aria-hidden="true"
                         style={{
                           height: `${distanceStrokeWidth(
-                            distanceScaleMaximum * level.ratio,
-                            distanceScaleMaximum,
+                            visibleDistanceMaximum * level.ratio,
+                            visibleDistanceMaximum,
                           )}px`,
                         }}
                       />
-                      <span>{level.label}</span>
+                      <span>
+                        {level.label}{' '}
+                        <b>{formatNetworkDistance(visibleDistanceMaximum * level.ratio)}</b>
+                      </span>
                     </span>
                   ))
                   : <span>No usage</span>}

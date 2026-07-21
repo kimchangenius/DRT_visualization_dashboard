@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 
 import {
+  REQUEST_EVENT_COLORS,
   RESULT_A_COLOR,
   RESULT_B_COLOR,
+  VEHICLE_STATUS_COLORS,
 } from '../config';
 import type {
   ReplayDispatchDecision,
@@ -45,6 +47,7 @@ interface StatusSegment {
   startTime: number;
   endTime: number;
   status: VehicleStatus;
+  passengerCount?: number;
   hasPassengerEvent?: boolean;
 }
 
@@ -68,15 +71,15 @@ type TimelineInteractionMode = 'pan' | 'select';
 
 const DEFAULT_VEHICLE_IDS = [1, 2, 3, 4];
 const CONTEXT_INTERVAL_ZOOM_FACTOR = 1.4;
+const MIN_PASSENGER_EVENT_BAR_WIDTH = 0.6;
+const MAX_PASSENGER_EVENT_BAR_WIDTH = 3.6;
+const PASSENGER_EVENT_GAP_RATIO = 0.45;
 
 const STATUS_META: Record<VehicleStatus, { label: string; color: string }> = {
-  idle: { label: 'Idle', color: 'transparent' },
-  picking_up: { label: 'Picking up', color: '#f59e0b' },
-  carrying: { label: 'Carrying', color: '#10b981' },
-  repositioning: { label: 'Repositioning', color: '#94a3b8' },
+  idle: { label: 'Idle', color: VEHICLE_STATUS_COLORS.idle },
+  picking_up: { label: 'Picking up', color: VEHICLE_STATUS_COLORS.picking_up },
+  carrying: { label: 'Carrying', color: VEHICLE_STATUS_COLORS.carrying },
 };
-
-const TIMELINE_STATUS_LEGEND: VehicleStatus[] = ['idle', 'picking_up', 'carrying'];
 
 function vehicleIdsForSources(
   resultA: ReplayVehicleSource | null,
@@ -205,6 +208,31 @@ function segmentMatchesDispatchDecision(
   );
 }
 
+function mixHexColors(from: string, to: string, ratio: number): string {
+  const clampedRatio = Math.min(1, Math.max(0, ratio));
+  const parseChannel = (color: string, offset: number) =>
+    Number.parseInt(color.slice(offset, offset + 2), 16);
+  const channel = (offset: number) => Math.round(
+    parseChannel(from, offset) +
+    (parseChannel(to, offset) - parseChannel(from, offset)) * clampedRatio,
+  );
+  return `rgb(${channel(1)} ${channel(3)} ${channel(5)})`;
+}
+
+function timelineSegmentColor(
+  status: VehicleStatus,
+  passengerCount: number,
+  passengerScaleMaximum: number,
+): string {
+  const baseColor = STATUS_META[status].color;
+  if (baseColor === 'transparent') return baseColor;
+  const normalizedCount = Math.min(
+    1,
+    Math.max(0, passengerCount) / Math.max(1, passengerScaleMaximum),
+  );
+  return mixHexColors('#d9d9d9', baseColor, 0.32 + Math.sqrt(normalizedCount) * 0.68);
+}
+
 function passengerLoadStepPath(
   data: VehiclePassengerLoadDatum[],
   domain: TimelineDomain,
@@ -237,6 +265,7 @@ function VehiclePatternPassengerLoadChart({
   data,
   passengerEvents,
   domain,
+  fullDomain,
   currentTime,
   selectedInterval,
   interactionMode,
@@ -248,6 +277,7 @@ function VehiclePatternPassengerLoadChart({
   data: VehiclePassengerLoadDatum[];
   passengerEvents: PassengerEventDatum[];
   domain: TimelineDomain;
+  fullDomain: TimelineDomain;
   currentTime: number;
   selectedInterval: [number, number] | null;
   interactionMode: TimelineInteractionMode;
@@ -260,6 +290,8 @@ function VehiclePatternPassengerLoadChart({
   const [hoveredPoint, setHoveredPoint] = useState<{ point: VehiclePassengerLoadDatum; xPct: number } | null>(null);
   const [domainStart, domainEnd] = domain;
   const duration = Math.max(1, domainEnd - domainStart);
+  const fullDuration = Math.max(duration, fullDomain[1] - fullDomain[0]);
+  const zoomScale = Math.max(1, fullDuration / duration);
   const visibleData = data.filter(point => point.time >= domainStart && point.time <= domainEnd);
   const visiblePassengerEvents = passengerEvents.filter(
     event => event.time >= domainStart && event.time <= domainEnd,
@@ -270,6 +302,26 @@ function VehiclePatternPassengerLoadChart({
     1,
     ...passengerEvents.map(event => Math.max(event.pickupPassengers, event.dropoffPassengers)),
   );
+  const visibleEventPositions = visiblePassengerEvents.map(event =>
+    Math.min(100, Math.max(0, ((event.time - domainStart) / duration) * 100)),
+  );
+  let closestEventGap = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < visibleEventPositions.length; index += 1) {
+    closestEventGap = Math.min(
+      closestEventGap,
+      visibleEventPositions[index] - visibleEventPositions[index - 1],
+    );
+  }
+  const zoomScaledEventBarWidth = Math.min(
+    MAX_PASSENGER_EVENT_BAR_WIDTH,
+    MIN_PASSENGER_EVENT_BAR_WIDTH * zoomScale,
+  );
+  const eventBarWidth = Number.isFinite(closestEventGap)
+    ? Math.max(
+      MIN_PASSENGER_EVENT_BAR_WIDTH,
+      Math.min(zoomScaledEventBarWidth, closestEventGap * PASSENGER_EVENT_GAP_RATIO),
+    )
+    : zoomScaledEventBarWidth;
   const currentTimePct = Math.min(100, Math.max(0, ((currentTime - domainStart) / duration) * 100));
   const showCurrentTimeTick = currentTime >= domainStart && currentTime <= domainEnd;
   const selectedRangeStart = selectedInterval == null
@@ -361,18 +413,20 @@ function VehiclePatternPassengerLoadChart({
               {pickupHeight > 0 ? (
                 <rect
                   className="vehicle-pattern-passenger-event-pickup"
-                  x={Math.max(0, x - 0.8)}
+                  style={{ fill: REQUEST_EVENT_COLORS.pickup }}
+                  x={Math.min(100 - eventBarWidth, Math.max(0, x - eventBarWidth / 2))}
                   y={44 - pickupHeight}
-                  width="1.6"
+                  width={eventBarWidth}
                   height={pickupHeight}
                 />
               ) : null}
               {dropoffHeight > 0 ? (
                 <rect
                   className="vehicle-pattern-passenger-event-dropoff"
-                  x={Math.max(0, x - 0.8)}
+                  style={{ fill: REQUEST_EVENT_COLORS.dropoff }}
+                  x={Math.min(100 - eventBarWidth, Math.max(0, x - eventBarWidth / 2))}
                   y="44"
-                  width="1.6"
+                  width={eventBarWidth}
                   height={dropoffHeight}
                 />
               ) : null}
@@ -399,8 +453,6 @@ function VehiclePatternPassengerLoadChart({
         ) : null}
       </svg>
       <span className="vehicle-pattern-load-label">Onboard</span>
-      <span className="vehicle-pattern-event-label is-pickup">Pickup</span>
-      <span className="vehicle-pattern-event-label is-dropoff">Drop-off</span>
       {hoveredPoint ? (
         <div
           className={"vehicle-pattern-load-tooltip" + tooltipEdgeClass}
@@ -427,9 +479,9 @@ function EventSequenceBar({
   onTrackTopChange,
   selectedInterval,
   isDraftSelection,
-  selectedEventTime,
+  highlightedEventTime,
   dispatchDecisionFocus,
-  onSelectEventTime,
+  onHighlightEventTime,
 }: {
   passengerEvents: PassengerEventDatum[];
   hasEncodedEvents: boolean;
@@ -440,9 +492,9 @@ function EventSequenceBar({
   onTrackTopChange: (top: number) => void;
   selectedInterval: [number, number] | null;
   isDraftSelection: boolean;
-  selectedEventTime: number | null;
+  highlightedEventTime: number | null;
   dispatchDecisionFocus: ReplayDispatchDecision | null;
-  onSelectEventTime: (time: number | null) => void;
+  onHighlightEventTime: (time: number | null) => void;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const visibleEvents = passengerEvents;
@@ -561,10 +613,6 @@ function EventSequenceBar({
     <div className="vehicle-event-sequence" aria-label={`${visibleEvents.length} request event times`}>
       <div className="vehicle-event-sequence-head">
         <span>Event Sequence</span>
-        <span className="vehicle-event-sequence-legend">
-          <i className="is-pickup" /> Pickup
-          <i className="is-dropoff" /> Drop-off
-        </span>
       </div>
       {visibleEvents.length === 0 ? (
         <div className="vehicle-event-sequence-empty">
@@ -589,12 +637,20 @@ function EventSequenceBar({
               const inSelection = selectedInterval != null &&
                 eventGroup.time >= selectedInterval[0] &&
                 eventGroup.time <= selectedInterval[1];
-              const isSelected = selectedEventTime === eventGroup.time;
+              const isHighlighted = highlightedEventTime === eventGroup.time;
               return (
                 <div
                   key={`event-group-${eventGroup.time}`}
-                  className={`vehicle-event-sequence-group${inSelection ? ' is-selected-interval' : ''}${isSelected ? ' is-selected' : ''}`}
+                  className={`vehicle-event-sequence-group${inSelection ? ' is-selected-interval' : ''}${isHighlighted ? ' is-highlighted' : ''}`}
                   style={{ gridColumn: eventIndex + 1 }}
+                  onMouseEnter={() => onHighlightEventTime(eventGroup.time)}
+                  onMouseLeave={() => onHighlightEventTime(null)}
+                  onFocusCapture={() => onHighlightEventTime(eventGroup.time)}
+                  onBlurCapture={event => {
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                      onHighlightEventTime(null);
+                    }
+                  }}
                 >
                   {eventGroup.events.map(event => {
                     const passengerLabel = `P${event.passengerId}`;
@@ -603,16 +659,16 @@ function EventSequenceBar({
                       dispatchDecisionFocus?.requestId === event.passengerId &&
                       dispatchDecisionFocus.actionType === event.type;
                     return (
-                      <button
+                      <span
                         key={event.key}
-                        type="button"
                         className={`vehicle-event-sequence-box is-${event.type}${isDecisionFocus ? ' is-decision-focus' : ''}`}
-                        aria-pressed={isSelected}
-                      title={`${eventLabel} ${passengerLabel}${event.passengerCount > 1 ? ` (${event.passengerCount} passengers)` : ''} at t=${eventGroup.time}`}
-                      onClick={() => onSelectEventTime(isSelected ? null : eventGroup.time)}
-                    >
+                        style={{ background: REQUEST_EVENT_COLORS[event.type] }}
+                        tabIndex={0}
+                        onMouseDown={event => event.preventDefault()}
+                        title={`${eventLabel} ${passengerLabel}${event.passengerCount > 1 ? ` (${event.passengerCount} passengers)` : ''} at t=${eventGroup.time}`}
+                      >
                         <span>{event.passengerId}</span>
-                      </button>
+                      </span>
                     );
                   })}
                 </div>
@@ -628,6 +684,7 @@ function EventSequenceBar({
 function StatusTimelineRow({
   segments,
   domain,
+  fullDomain,
   currentTime,
   isPanning,
   interactionMode,
@@ -639,14 +696,15 @@ function StatusTimelineRow({
   draftInterval,
   passengerLoadData,
   passengerEventData,
+  passengerScaleMaximum,
   hasEncodedEvents,
   maxEventGroupCount,
   eventBoxWidth,
   eventSequenceScrollLeft,
   onEventSequenceScrollLeftChange,
-  selectedEventTime,
+  highlightedEventTime,
   dispatchDecisionFocus,
-  onSelectEventTime,
+  onHighlightEventTime,
   onSelectSegment,
   onWheel,
   onMouseDown,
@@ -655,6 +713,7 @@ function StatusTimelineRow({
 }: {
   segments: StatusSegment[];
   domain: TimelineDomain;
+  fullDomain: TimelineDomain;
   currentTime: number;
   isPanning: boolean;
   interactionMode: TimelineInteractionMode;
@@ -666,14 +725,15 @@ function StatusTimelineRow({
   draftInterval: [number, number] | null;
   passengerLoadData: VehiclePassengerLoadDatum[];
   passengerEventData: PassengerEventDatum[];
+  passengerScaleMaximum: number;
   hasEncodedEvents: boolean;
   maxEventGroupCount: number;
   eventBoxWidth: number;
   eventSequenceScrollLeft: number;
   onEventSequenceScrollLeftChange: (scrollLeft: number) => void;
-  selectedEventTime: number | null;
+  highlightedEventTime: number | null;
   dispatchDecisionFocus: ReplayDispatchDecision | null;
-  onSelectEventTime: (time: number | null) => void;
+  onHighlightEventTime: (time: number | null) => void;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
   onWheel: (event: TimelineWheelEvent) => void;
   onMouseDown: (event: MouseEvent<HTMLDivElement>) => void;
@@ -695,16 +755,16 @@ function StatusTimelineRow({
   );
   const selectedRangeStart = selectedInterval == null ? null : Math.max(domainStart, selectedInterval[0]);
   const selectedRangeEnd = selectedInterval == null ? null : Math.min(domainEnd, selectedInterval[1]);
-  const selectedEventRawPct = selectedEventTime == null
+  const selectedEventRawPct = highlightedEventTime == null
     ? null
-    : ((selectedEventTime - domainStart) / duration) * 100;
+    : ((highlightedEventTime - domainStart) / duration) * 100;
   const selectedEventPct = selectedEventRawPct == null
     ? null
     : Math.min(100, Math.max(0, selectedEventRawPct));
   const visibleEventGroups = passengerEventData;
-  const selectedEventIndex = selectedEventTime == null
+  const selectedEventIndex = highlightedEventTime == null
     ? -1
-    : visibleEventGroups.findIndex(event => event.time === selectedEventTime);
+    : visibleEventGroups.findIndex(event => event.time === highlightedEventTime);
   const showSelectedEvent = selectedEventPct != null && selectedEventIndex >= 0;
   const selectedSequencePct = selectedEventIndex < 0
     ? null
@@ -834,9 +894,13 @@ function StatusTimelineRow({
                 style={{
                   left: `${clampedLeft}%`,
                   width: `${Math.min(width, 100 - clampedLeft)}%`,
-                  background: meta.color,
+                  background: timelineSegmentColor(
+                    segment.status,
+                    segment.passengerCount ?? 0,
+                    passengerScaleMaximum,
+                  ),
                 }}
-                title={clickable ? `${resultLabel} V${vehicleId} ${meta.label}: t=${segment.startTime}-${segment.endTime}${segment.hasPassengerEvent ? ' / passenger pickup-dropoff boundary' : ''}` : `${resultLabel} ${meta.label}: t=${segment.startTime}-${segment.endTime}${segment.hasPassengerEvent ? ' / passenger pickup-dropoff boundary' : ''}`}
+                title={`${clickable ? `${resultLabel} V${vehicleId}` : resultLabel} ${meta.label}: t=${segment.startTime}-${segment.endTime} / ${segment.passengerCount ?? 0} passengers${segment.hasPassengerEvent ? ' / passenger pickup-dropoff boundary' : ''}`}
                 aria-label={clickable ? `Inspect ${resultLabel} V${vehicleId} ${meta.label} from ${segment.startTime} to ${segment.endTime}` : undefined}
                 onClick={clickable ? event => {
                   event.stopPropagation();
@@ -874,6 +938,7 @@ function StatusTimelineRow({
           data={passengerLoadData}
           passengerEvents={passengerEventData}
           domain={domain}
+          fullDomain={fullDomain}
           currentTime={currentTime}
           selectedInterval={selectedInterval}
           interactionMode={interactionMode}
@@ -905,9 +970,9 @@ function StatusTimelineRow({
         onTrackTopChange={setEventSequenceTrackTop}
         selectedInterval={selectedInterval}
         isDraftSelection={draftInterval != null}
-        selectedEventTime={selectedEventTime}
+        highlightedEventTime={highlightedEventTime}
         dispatchDecisionFocus={dispatchDecisionFocus}
-        onSelectEventTime={onSelectEventTime}
+        onHighlightEventTime={onHighlightEventTime}
       />
     </div>
   );
@@ -949,7 +1014,7 @@ function VehiclePatternRow({
   const [zoomDomain, setZoomDomain] = useState<TimelineDomain | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const [draftInterval, setDraftInterval] = useState<[number, number] | null>(null);
-  const [selectedEventTime, setSelectedEventTime] = useState<number | null>(null);
+  const [highlightedEventTime, setHighlightedEventTime] = useState<number | null>(null);
   const [eventSequenceScrollLeft, setEventSequenceScrollLeft] = useState(0);
   const panStartRef = useRef<{ x: number; domain: TimelineDomain } | null>(null);
   const selectionStartRef = useRef<number | null>(null);
@@ -980,6 +1045,11 @@ function VehiclePatternRow({
     () => buildPassengerEventData(source, vehicleId),
     [source, vehicleId],
   );
+  const passengerScaleMaximum = Math.max(
+    1,
+    source?.frames[0]?.vehCapacity ?? 0,
+    ...segments.map(segment => segment.passengerCount ?? 0),
+  );
   const canInteract = segments.length > 0 && fullDomain[1] > fullDomain[0];
   const activeDomain = clampDomain(zoomDomain ?? fullDomain, fullDomain);
   const replayFrameTimes = useMemo(
@@ -1007,7 +1077,7 @@ function VehiclePatternRow({
   }, [interactionMode]);
 
   useEffect(() => {
-    setSelectedEventTime(null);
+    setHighlightedEventTime(null);
     setEventSequenceScrollLeft(0);
   }, [source, vehicleId]);
 
@@ -1178,6 +1248,7 @@ function VehiclePatternRow({
       <StatusTimelineRow
         segments={segments}
         domain={activeDomain}
+        fullDomain={fullDomain}
         currentTime={currentTime}
         isPanning={isPanning}
         interactionMode={interactionMode}
@@ -1189,14 +1260,15 @@ function VehiclePatternRow({
         draftInterval={draftInterval}
         passengerLoadData={passengerLoadData}
         passengerEventData={passengerEventData}
+        passengerScaleMaximum={passengerScaleMaximum}
         hasEncodedEvents={source?.passengerEvents != null}
         maxEventGroupCount={maxEventGroupCount}
         eventBoxWidth={eventBoxWidth}
         eventSequenceScrollLeft={eventSequenceScrollLeft}
         onEventSequenceScrollLeftChange={setEventSequenceScrollLeft}
-        selectedEventTime={selectedEventTime}
+        highlightedEventTime={highlightedEventTime}
         dispatchDecisionFocus={activeDispatchDecision}
-        onSelectEventTime={setSelectedEventTime}
+        onHighlightEventTime={setHighlightedEventTime}
         onSelectSegment={onSelectSegment}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
@@ -1218,6 +1290,7 @@ function ResultVehicleCard({
   contextInterval,
   maxEventGroupCount,
   dispatchDecisionFocus,
+  headerControl,
   onSelectSegment,
 }: {
   side: 'left' | 'right';
@@ -1230,6 +1303,7 @@ function ResultVehicleCard({
   contextInterval: TimelineDomain | null;
   maxEventGroupCount: number;
   dispatchDecisionFocus: ReplayDispatchDecision | null;
+  headerControl?: ReactNode;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
 }) {
   const [interactionMode, setInteractionMode] = useState<TimelineInteractionMode>('pan');
@@ -1285,6 +1359,7 @@ function ResultVehicleCard({
       <div className="vehicle-pattern-result-head">
         <h3 style={{ color }}>{title}</h3>
         <div className="vehicle-pattern-result-summary">
+          {headerControl}
           <div className="vehicle-pattern-interaction-mode" aria-label={`${title} timeline interaction mode`}>
             <button
               type="button"
@@ -1303,19 +1378,10 @@ function ResultVehicleCard({
               Select
             </button>
           </div>
-          <div className="vehicle-pattern-head-legend" aria-label={`${title} timeline status legend`}>
-            <div className="vehicle-pattern-legend vehicle-pattern-legend-inline">
-              {TIMELINE_STATUS_LEGEND.map(status => (
-                <span key={status}>
-                  <i
-                    style={{
-                      background: STATUS_META[status].color,
-                      borderColor: status === 'idle' ? 'rgba(148, 163, 184, 0.42)' : STATUS_META[status].color,
-                    }}
-                  />
-                  {STATUS_META[status].label}
-                </span>
-              ))}
+          <div className="vehicle-pattern-head-legend" aria-label={`${title} request event legend`}>
+            <div className="vehicle-event-sequence-legend vehicle-event-sequence-legend-header">
+              <span><i className="is-pickup" /> Pickup</span>
+              <span><i className="is-dropoff" /> Drop-off</span>
             </div>
           </div>
           <span className="vehicle-pattern-result-count">{source ? `${vehicleIds.length} vehicles` : 'No file'}</span>
@@ -1352,6 +1418,7 @@ export function ResultVehiclePatterns({
   selectedSegment,
   contextInterval = null,
   dispatchDecisionFocus = null,
+  headerControl,
   onSelectSegment,
 }: {
   source: ReplayVehicleSource | null;
@@ -1360,6 +1427,7 @@ export function ResultVehiclePatterns({
   selectedSegment: VehiclePatternSelection | null;
   contextInterval?: TimelineDomain | null;
   dispatchDecisionFocus?: ReplayDispatchDecision | null;
+  headerControl?: ReactNode;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
 }) {
   const maxEventGroupCount = useMemo(
@@ -1371,7 +1439,7 @@ export function ResultVehiclePatterns({
   );
 
   return (
-    <section className="vehicle-pattern-section result-analysis-pattern-section">
+    <section className="vehicle-pattern-section result-analysis-pattern-section is-vehicle-timeline-hidden">
       <ResultVehicleCard
         side="left"
         title="Vehicle Pattern"
@@ -1382,6 +1450,7 @@ export function ResultVehiclePatterns({
         selectedSegment={selectedSegment}
         contextInterval={contextInterval}
         dispatchDecisionFocus={dispatchDecisionFocus}
+        headerControl={headerControl}
         maxEventGroupCount={maxEventGroupCount}
         onSelectSegment={onSelectSegment}
       />

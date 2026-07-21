@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import { REQUEST_EVENT_COLORS, VEHICLE_STATUS_COLORS } from '../config';
 import { nodes, undirectedLinks } from '../data/siouxFallsNetwork';
 import type {
   Vehicle,
@@ -67,8 +68,8 @@ function tooltipPlacementForNode(nodeId: number | null): TooltipPlacement {
 function vehicleColor(status: string) {
   switch (status) {
     case 'idle': return '#3b82f6';
-    case 'picking_up': return '#f59e0b';
-    case 'carrying': return '#10b981';
+    case 'picking_up': return VEHICLE_STATUS_COLORS.picking_up;
+    case 'carrying': return VEHICLE_STATUS_COLORS.carrying;
     default: return '#6b7280';
   }
 }
@@ -179,8 +180,8 @@ function collectSegmentPassengers(
 // }
 
 const ROUTE_TRACE_COLOR = '#a78bfa';
-const PICKUP_COLOR = '#f59e0b';
-const DROPOFF_COLOR = '#10b981';
+const PICKUP_COLOR = REQUEST_EVENT_COLORS.pickup;
+const DROPOFF_COLOR = REQUEST_EVENT_COLORS.dropoff;
 
 export default function NetworkMap({
   vehicles,
@@ -639,10 +640,10 @@ export default function NetworkMap({
                 <span className="legend-dot" style={{ background: '#3b82f6' }} /> Idle
               </div>
               <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#f59e0b' }} /> Picking up
+                <span className="legend-dot" style={{ background: VEHICLE_STATUS_COLORS.picking_up }} /> Picking up
               </div>
               <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#10b981' }} /> Carrying
+                <span className="legend-dot" style={{ background: VEHICLE_STATUS_COLORS.carrying }} /> Carrying
               </div>
               <div className="legend-item">
                 <span className="legend-triangle-down" style={{ borderTopColor: PICKUP_COLOR }} /> P: Waiting
@@ -657,13 +658,13 @@ export default function NetworkMap({
                 <span className="legend-dot" style={{ background: '#3b82f6' }} /> Idle
               </div>
               <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#f59e0b' }} /> Picking up
+                <span className="legend-dot" style={{ background: VEHICLE_STATUS_COLORS.picking_up }} /> Picking up
               </div>
               <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#10b981' }} /> Carrying
+                <span className="legend-dot" style={{ background: VEHICLE_STATUS_COLORS.carrying }} /> Carrying
               </div>
               <div className="legend-item">
-                <span className="legend-dot" style={{ background: '#f59e0b', opacity: 0.4 }} /> Waiting Passenger
+                <span className="legend-dot" style={{ background: REQUEST_EVENT_COLORS.pickup, opacity: 0.4 }} /> Waiting Passenger
               </div>
             </>
           )}

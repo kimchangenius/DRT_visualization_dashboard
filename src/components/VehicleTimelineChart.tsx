@@ -5,7 +5,7 @@ import type {
   VehicleStatus,
   VehicleTimelineDatum,
 } from '../types/simulation';
-import { CHART_ANIMATION_DURATION_MS } from '../config';
+import { CHART_ANIMATION_DURATION_MS, VEHICLE_STATUS_COLORS } from '../config';
 
 interface VehicleTimelineChartProps {
   data: VehicleTimelineDatum[];
@@ -16,10 +16,9 @@ interface VehicleTimelineChartProps {
 }
 
 const STATUS_META: Record<VehicleStatus, { label: string; color: string }> = {
-  idle: { label: 'Idle', color: 'transparent' },
-  picking_up: { label: 'Picking up', color: '#f59e0b' },
-  carrying: { label: 'Carrying', color: '#10b981' },
-  repositioning: { label: 'Repositioning', color: '#94a3b8' },
+  idle: { label: 'Idle', color: VEHICLE_STATUS_COLORS.idle },
+  picking_up: { label: 'Picking up', color: VEHICLE_STATUS_COLORS.picking_up },
+  carrying: { label: 'Carrying', color: VEHICLE_STATUS_COLORS.carrying },
 };
 
 function formatDuration(startTime: number, endTime: number): string {
@@ -208,9 +207,7 @@ export default function VehicleTimelineChart({
             </div>
 
             <div className="vehicle-timeline-legend">
-              {(Object.entries(STATUS_META) as Array<[VehicleStatus, { label: string; color: string }]>).filter(
-                ([status]) => status !== 'repositioning',
-              ).map(([status, meta]) => (
+              {(Object.entries(STATUS_META) as Array<[VehicleStatus, { label: string; color: string }]>).map(([status, meta]) => (
                 <span key={status} className="vehicle-timeline-legend-item">
                   <span
                     className="vehicle-timeline-legend-dot"

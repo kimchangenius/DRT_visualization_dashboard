@@ -226,8 +226,7 @@ function hasValidVehicle(value: unknown): boolean {
     (
       value.status === 'idle' ||
       value.status === 'picking_up' ||
-      value.status === 'carrying' ||
-      value.status === 'repositioning'
+      value.status === 'carrying'
     ) &&
     hasNullablePositiveInteger(value.passengerId) &&
     (value.numPassengers === undefined || hasNonNegativeNumber(value.numPassengers)) &&

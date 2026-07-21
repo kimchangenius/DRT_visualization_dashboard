@@ -1,6 +1,9 @@
 import { useMemo } from 'react';
 
 import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
+import {
+  CANCELLATION_ANALYSIS_COLORS,
+} from '../config';
 import type {
   Passenger,
   ReplayDispatchDecision,
@@ -23,14 +26,15 @@ const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
 const SELECTED_REQUEST_SIZE = 16;
 const OTHER_REQUEST_SIZE = 12;
-const SELECTED_REQUEST_COLOR = '#bb5566';
-const OTHER_REQUEST_COLOR = '#56b4e9';
+const SELECTED_REQUEST_COLOR = CANCELLATION_ANALYSIS_COLORS.request.selected;
+const OTHER_REQUEST_COLOR = CANCELLATION_ANALYSIS_COLORS.request.waiting;
 
 function vehicleColor(status: Vehicle['status']): string {
-  if (status === 'picking_up') return '#e69f00';
-  if (status === 'carrying') return '#009e73';
-  if (status === 'repositioning') return '#7f7f7f';
-  return '#0072b2';
+  return CANCELLATION_ANALYSIS_COLORS.vehicle[status];
+}
+
+function vehicleLabelColor(status: Vehicle['status']): string {
+  return status === 'idle' ? '#ffffff' : '#111827';
 }
 
 function waitingRequestsByOrigin(
@@ -156,6 +160,7 @@ export default function CancellationContextMap({
                   y={origin.y - markerOffset}
                   width={SELECTED_REQUEST_SIZE}
                   height={SELECTED_REQUEST_SIZE}
+                  fill={SELECTED_REQUEST_COLOR}
                   transform={`rotate(45 ${origin.x} ${origin.y})`}
                 >
                   <title>{`Selected R${selectedRequest.id}: origin N${selectedRequest.originNodeId}`}</title>
@@ -176,6 +181,7 @@ export default function CancellationContextMap({
                   y={node.y - markerOffset}
                   width={OTHER_REQUEST_SIZE}
                   height={OTHER_REQUEST_SIZE}
+                  fill={OTHER_REQUEST_COLOR}
                 >
                   <title>{`${requestIds}: waiting at N${nodeId}`}</title>
                 </rect>
@@ -190,6 +196,7 @@ export default function CancellationContextMap({
                 y={decisionTargetNode.y - decisionTargetSize / 2}
                 width={decisionTargetSize}
                 height={decisionTargetSize}
+                fill={CANCELLATION_ANALYSIS_COLORS.decision[dispatchDecisionFocus.actionType]}
               >
                 <title>
                   {`${dispatchDecisionFocus.actionType === 'pickup' ? 'Pickup origin' : 'Drop-off destination'} for R${decisionRequest.id}`}
@@ -225,7 +232,13 @@ export default function CancellationContextMap({
                 >
                   <title>{`V${vehicle.id}: ${displayedStatus.replace('_', ' ')} at t=${frame.metrics.currentTime}`}</title>
                 </circle>
-                <text x={position.x} y={position.y + 0.35}>V{vehicle.id}</text>
+                <text
+                  x={position.x}
+                  y={position.y + 0.35}
+                  fill={vehicleLabelColor(displayedStatus)}
+                >
+                  V{vehicle.id}
+                </text>
               </g>
             );
           })}
@@ -237,7 +250,7 @@ export default function CancellationContextMap({
             const badgeY = node.y - 7;
             return (
               <g key={`request-count-${nodeId}`} className="cancellation-context-request-count">
-                <circle cx={badgeX} cy={badgeY} r={4.2} />
+                <circle cx={badgeX} cy={badgeY} r={4.2} fill={OTHER_REQUEST_COLOR} />
                 <text x={badgeX} y={badgeY + 0.35}>{requests.length}</text>
               </g>
             );
@@ -245,9 +258,9 @@ export default function CancellationContextMap({
         </svg>
       </div>
       <div className="cancellation-context-footer">
-        <span><i style={{ background: '#0072b2' }} />Idle</span>
-        <span><i style={{ background: '#e69f00' }} />Picking up</span>
-        <span><i style={{ background: '#009e73' }} />Carrying</span>
+        <span><i style={{ background: CANCELLATION_ANALYSIS_COLORS.vehicle.idle }} />Idle</span>
+        <span><i style={{ background: CANCELLATION_ANALYSIS_COLORS.vehicle.picking_up }} />Picking up</span>
+        <span><i style={{ background: CANCELLATION_ANALYSIS_COLORS.vehicle.carrying }} />Carrying</span>
         <span><i className="is-request" style={{ background: OTHER_REQUEST_COLOR }} />Other waiting requests</span>
         <span><i className="is-selected-request" style={{ background: SELECTED_REQUEST_COLOR }} />Selected request</span>
         {dispatchDecisionFocus ? (
@@ -255,7 +268,10 @@ export default function CancellationContextMap({
         ) : null}
         {dispatchDecisionFocus?.requestId != null ? (
           <span>
-            <i className={`is-decision-target is-${dispatchDecisionFocus.actionType}`} />
+            <i
+              className={`is-decision-target is-${dispatchDecisionFocus.actionType}`}
+              style={{ background: CANCELLATION_ANALYSIS_COLORS.decision[dispatchDecisionFocus.actionType] }}
+            />
             {dispatchDecisionFocus.actionType === 'pickup' ? 'Observed pickup target' : 'Observed drop-off target'}
           </span>
         ) : null}

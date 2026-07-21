@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
+import {
+  CANCELLATION_ANALYSIS_COLORS,
+  REQUEST_OUTCOME_COLORS,
+  VEHICLE_STATUS_COLORS,
+} from '../config';
 import type {
   CancellationFeasibilityPoint,
   Passenger,
@@ -12,6 +17,11 @@ export interface CancellationAnalysisContext {
   requestId: number;
   startTime: number;
   endTime: number;
+}
+
+export interface CancelledNodeSelection {
+  nodeId: number;
+  passengers: Passenger[];
 }
 
 interface DemandNetworkMapProps {
@@ -29,6 +39,9 @@ interface DemandNetworkMapProps {
   onSelectCancellationContext?: (context: CancellationAnalysisContext) => void;
   onSelectDispatchDecision?: (decision: ReplayDispatchDecision | null) => void;
   onCloseCancellationContext?: () => void;
+  selectedCancellationNodeId?: number | null;
+  showCancellationDiagnostics?: boolean;
+  onCancelledNodeSelectionChange?: (selection: CancelledNodeSelection | null) => void;
 }
 
 interface NodeDemand {
@@ -55,62 +68,91 @@ interface DiagnosticsDragState {
 const PADDING = 22;
 const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
-// Paul Tol's color-blind-safe, grayscale-compatible high-contrast palette.
-const ACCEPT_COLOR = '#004488';
-const PENDING_COLOR = '#ddaa33';
-const CANCELLED_COLOR = '#bb5566';
+// ColorBrewer Set1 outcomes do not reuse operational event hues.
+const ACCEPT_COLOR = REQUEST_OUTCOME_COLORS.accepted;
+const PENDING_COLOR = REQUEST_OUTCOME_COLORS.pending;
+const CANCELLED_COLOR = REQUEST_OUTCOME_COLORS.cancelled;
 const CANCELLATION_CATEGORY_META = {
   deferred: {
     label: 'Feasible but not selected',
     legendLabel: 'Not selected',
-    color: '#66ccee',
+    color: '#fb6a4a',
   },
   infeasible: {
     label: 'No feasible vehicle',
     legendLabel: 'No feasible',
-    color: '#aa3377',
+    color: '#cb181d',
   },
 } as const;
-// Okabe-Ito qualitative colors: unordered categories, color-vision-deficiency safe.
+// D3/ColorBrewer Set2: muted hues distinguish nominal feasibility categories.
 const FEASIBILITY_STATUS_META = [
   {
     key: 'unavailableVehicleCount',
     vehicleIdsKey: 'unavailableVehicleIds',
     label: 'In service',
-    color: '#999999',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.inService,
   },
   {
     key: 'capacityBlockedVehicles',
     vehicleIdsKey: 'capacityBlockedVehicleIds',
     label: 'No seats',
-    color: '#cc79a7',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.constraintBlocked,
   },
   {
     key: 'pickupDeadlineBlockedVehicles',
     vehicleIdsKey: 'pickupDeadlineBlockedVehicleIds',
     label: 'Late pickup',
-    color: '#e69f00',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.constraintBlocked,
   },
   {
     key: 'serviceConstraintBlockedVehicles',
     vehicleIdsKey: 'serviceConstraintBlockedVehicleIds',
     label: 'Ride-time limit',
-    color: '#0072b2',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.constraintBlocked,
   },
   {
     key: 'feasibleVehicleCount',
     vehicleIdsKey: 'feasibleVehicleIds',
     label: 'Assignable',
-    color: '#009e73',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.assignable,
+  },
+] as const;
+const FEASIBILITY_LEGEND_META = [
+  {
+    key: 'in-service',
+    label: 'In service',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.inService,
+  },
+  {
+    key: 'constraint-blocked',
+    label: 'Constraint blocked',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.constraintBlocked,
+  },
+  {
+    key: 'assignable',
+    label: 'Assignable',
+    color: CANCELLATION_ANALYSIS_COLORS.feasibility.assignable,
   },
 ] as const;
 const DISPATCH_ACTION_META: Record<
   ReplayDispatchDecision['actionType'],
-  { label: string; color: string }
+  { label: string; color: string; textColor: string }
 > = {
-  pickup: { label: 'Pickup', color: '#228833' },
-  dropoff: { label: 'Drop-off', color: '#cc6677' },
-  wait: { label: 'Wait', color: '#6b7280' },
+  pickup: {
+    label: 'Pickup',
+    color: CANCELLATION_ANALYSIS_COLORS.decision.pickup,
+    textColor: '#111827',
+  },
+  dropoff: {
+    label: 'Drop-off',
+    color: CANCELLATION_ANALYSIS_COLORS.decision.dropoff,
+    textColor: '#000000',
+  },
+  wait: {
+    label: 'Wait',
+    color: CANCELLATION_ANALYSIS_COLORS.decision.wait,
+    textColor: '#000000',
+  },
 };
 
 type CancellationCategory = keyof typeof CANCELLATION_CATEGORY_META;
@@ -233,16 +275,18 @@ function observedChoicesForPassenger(
   });
 }
 
-function CandidateAvailabilityTimeline({
+export function CandidateAvailabilityTimeline({
   passenger,
   dispatchDecisions,
   selectedDispatchDecision,
   onSelectDispatchDecision,
+  hideHeading = false,
 }: {
   passenger: Passenger | null;
   dispatchDecisions: ReplayDispatchDecision[];
   selectedDispatchDecision: ReplayDispatchDecision | null;
   onSelectDispatchDecision?: (decision: ReplayDispatchDecision | null) => void;
+  hideHeading?: boolean;
 }) {
   if (!passenger) {
     return <div className="demand-cancellation-visual-empty">Select a request.</div>;
@@ -271,11 +315,6 @@ function CandidateAvailabilityTimeline({
   const selectedDecisionKey = selectedDispatchDecision
     ? dispatchDecisionKey(selectedDispatchDecision)
     : null;
-  const observedActionTypes = (
-    Object.keys(DISPATCH_ACTION_META) as ReplayDispatchDecision['actionType'][]
-  ).filter(actionType =>
-    observedChoices.some(decision => decision.actionType === actionType),
-  );
 
   return (
     <section className="demand-cancellation-request-visual">
@@ -285,7 +324,7 @@ function CandidateAvailabilityTimeline({
         <span>Wait {Math.max(0, cancellationTime - startTime)}</span>
         <span>{cancellationCause(passenger)}</span>
       </div>
-      <h4>Candidate Availability Timeline</h4>
+      {!hideHeading ? <h4>Candidate Vehicle Pattern</h4> : null}
       {history.length > 0 && hasVehicleIds ? (
         <div
           className="demand-cancellation-vehicle-timeline"
@@ -309,7 +348,10 @@ function CandidateAvailabilityTimeline({
                 <strong>V{vehicleId}</strong>
                 <div
                   className="demand-cancellation-vehicle-track"
-                  style={{ height: `${trackHeight}px` }}
+                  style={{
+                    height: `${trackHeight}px`,
+                    borderRightColor: CANCELLATION_ANALYSIS_COLORS.request.selected,
+                  }}
                 >
                   {history.map((point, pointIndex) => {
                     const intervalEnd = Math.min(
@@ -329,7 +371,7 @@ function CandidateAvailabilityTimeline({
                           width: `${((intervalEnd - point.time) / duration) * 100}%`,
                           background: status?.color,
                         }}
-                        title={`V${vehicleId}: ${status?.label ?? 'Status unavailable'} at t=${point.time}`}
+                        title={status?.label ?? 'Status unavailable'}
                       />
                     );
                   })}
@@ -358,6 +400,7 @@ function CandidateAvailabilityTimeline({
                           top: `${4 + stackIndex * 21}px`,
                           left: `${left}%`,
                           background: actionMeta.color,
+                          color: actionMeta.textColor,
                         }}
                         title={`t=${decision.time} · round ${decision.decisionRound + 1} · V${vehicleId} could serve R${passenger.id} · selected ${targetLabel}`}
                         aria-label={`At time ${decision.time}, round ${decision.decisionRound + 1}, vehicle ${vehicleId} selected ${targetLabel}`}
@@ -382,30 +425,178 @@ function CandidateAvailabilityTimeline({
             </div>
           </div>
           <div className="demand-cancellation-status-legend">
-            {FEASIBILITY_STATUS_META.map(meta => (
+            {FEASIBILITY_LEGEND_META.map(meta => (
               <span key={meta.key}><i style={{ background: meta.color }} />{meta.label}</span>
             ))}
           </div>
-          {observedChoices.length > 0 ? (
-            <div className="demand-cancellation-decision-legend" aria-label="Observed dispatch choice legend">
-              <b>Observed choice</b>
-              {observedActionTypes.map(actionType => {
-                const meta = DISPATCH_ACTION_META[actionType];
-                return (
-                  <span key={actionType}>
-                    <i style={{ background: meta.color }} />
-                    {meta.label}
-                  </span>
-                );
-              })}
-            </div>
-          ) : null}
         </div>
       ) : (
         <p className="demand-cancellation-legacy-note">
           Generate a new replay to visualize vehicle-level candidate history.
         </p>
       )}
+    </section>
+  );
+}
+
+type RequestPatternPhase = 'queued' | 'assigned' | 'onboard';
+
+const REQUEST_PATTERN_PHASE_META: Record<
+  RequestPatternPhase,
+  { label: string; color: string }
+> = {
+  queued: { label: 'Queued', color: REQUEST_OUTCOME_COLORS.pending },
+  assigned: { label: 'Assigned', color: REQUEST_OUTCOME_COLORS.accepted },
+  onboard: { label: 'Onboard', color: VEHICLE_STATUS_COLORS.carrying },
+};
+
+export function RequestPatternLegend({ inline = false }: { inline?: boolean }) {
+  return (
+    <div
+      className={`request-pattern-legend${inline ? ' request-pattern-legend-inline' : ''}`}
+      aria-label="Request lifecycle legend"
+    >
+      {(Object.keys(REQUEST_PATTERN_PHASE_META) as RequestPatternPhase[]).map(phase => (
+        <span key={phase}>
+          <i style={{ background: REQUEST_PATTERN_PHASE_META[phase].color }} />
+          {REQUEST_PATTERN_PHASE_META[phase].label}
+        </span>
+      ))}
+      <span><i className="is-cancelled" />Cancelled</span>
+    </div>
+  );
+}
+
+function requestPatternStatusLabel(passenger: Passenger): string {
+  if (passenger.status === 'cancelled' || passenger.cancellationTime != null) return 'Cancelled';
+  if (passenger.status === 'delivered' || passenger.deliveryTime != null) return 'Delivered';
+  if (passenger.status === 'picked_up' || passenger.pickupTime != null) return 'Onboard';
+  if (passenger.assignmentTime != null || passenger.assignedVehicleId != null) return 'Assigned';
+  return 'Queued';
+}
+
+export function RequestPatternPanel({
+  passengers,
+  replayTime,
+  selectedRequestId,
+  onSelectRequest,
+  onClose,
+  showLegend = true,
+}: {
+  passengers: Passenger[];
+  replayTime: number;
+  selectedRequestId: number | null;
+  onSelectRequest: (passenger: Passenger) => void;
+  onClose?: () => void;
+  showLegend?: boolean;
+}) {
+  if (passengers.length === 0) {
+    return <div className="request-pattern-empty">No requests available.</div>;
+  }
+
+  const domainStart = Math.min(...passengers.map(passenger => passenger.requestTime));
+  const domainEnd = Math.max(
+    domainStart + 1,
+    ...passengers.map(passenger =>
+      passenger.cancellationTime ?? passenger.deliveryTime ?? replayTime,
+    ),
+  );
+  const duration = Math.max(1, domainEnd - domainStart);
+  const phaseStyle = (start: number, end: number) => ({
+    left: `${((Math.max(domainStart, start) - domainStart) / duration) * 100}%`,
+    width: `${((Math.max(start, Math.min(domainEnd, end)) - Math.max(domainStart, start)) / duration) * 100}%`,
+  });
+
+  return (
+    <section className="request-pattern-panel" aria-label="Request lifecycle patterns">
+      {showLegend || onClose ? <div className="request-pattern-toolbar">
+        {showLegend ? <RequestPatternLegend /> : null}
+        {onClose ? (
+          <button
+            type="button"
+            className="request-pattern-close"
+            aria-label="Close request pattern"
+            title="Close request pattern"
+            onClick={onClose}
+          >
+            <span aria-hidden="true" />
+          </button>
+        ) : null}
+      </div> : null}
+      <div className="request-pattern-rows">
+        {passengers.map(passenger => {
+          const endTime = passenger.cancellationTime ?? passenger.deliveryTime ?? replayTime;
+          const assignmentTime = passenger.assignmentTime == null
+            ? null
+            : Math.min(endTime, Math.max(passenger.requestTime, passenger.assignmentTime));
+          const pickupTime = passenger.pickupTime == null
+            ? null
+            : Math.min(endTime, Math.max(passenger.requestTime, passenger.pickupTime));
+          const queuedEnd = assignmentTime ?? pickupTime ?? endTime;
+          const assignedEnd = pickupTime ?? endTime;
+          const passengerCount = typeof passenger.numPassengers === 'number' && passenger.numPassengers > 0
+            ? passenger.numPassengers
+            : 1;
+          const isSelected = passenger.id === selectedRequestId;
+          const isCancelled = passenger.status === 'cancelled' || passenger.cancellationTime != null;
+          const endpointLeft = Math.min(
+            100,
+            Math.max(0, ((endTime - domainStart) / duration) * 100),
+          );
+
+          return (
+            <button
+              key={passenger.id}
+              type="button"
+              className={`request-pattern-row${isSelected ? ' is-selected' : ''}`}
+              aria-pressed={isSelected}
+              onClick={() => onSelectRequest(passenger)}
+            >
+              <span className="request-pattern-row-label">
+                <strong>R{passenger.id}</strong>
+                <span>N{passenger.originNodeId} to N{passenger.destinationNodeId}</span>
+                <small>
+                  {passengerCount} passenger{passengerCount === 1 ? '' : 's'} · {requestPatternStatusLabel(passenger)}
+                </small>
+              </span>
+              <span className="request-pattern-track">
+                {queuedEnd > passenger.requestTime ? (
+                  <i
+                    className="is-queued"
+                    style={phaseStyle(passenger.requestTime, queuedEnd)}
+                    title={`Queued: t=${passenger.requestTime}-${queuedEnd}`}
+                  />
+                ) : null}
+                {assignmentTime != null && assignedEnd > assignmentTime ? (
+                  <i
+                    className="is-assigned"
+                    style={phaseStyle(assignmentTime, assignedEnd)}
+                    title={`Assigned to V${passenger.assignedVehicleId ?? '?'}: t=${assignmentTime}-${assignedEnd}`}
+                  />
+                ) : null}
+                {pickupTime != null && endTime > pickupTime ? (
+                  <i
+                    className="is-onboard"
+                    style={phaseStyle(pickupTime, endTime)}
+                    title={`Onboard: t=${pickupTime}-${endTime}`}
+                  />
+                ) : null}
+                {isCancelled ? (
+                  <b
+                    className="request-pattern-cancel-marker"
+                    style={{ left: `${endpointLeft}%` }}
+                    title={`Cancelled at t=${endTime}`}
+                  />
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="request-pattern-axis">
+        <span />
+        <div><b>t={domainStart}</b><b>t={domainEnd}</b></div>
+      </div>
     </section>
   );
 }
@@ -425,8 +616,14 @@ export default function DemandNetworkMap({
   onSelectCancellationContext,
   onSelectDispatchDecision,
   onCloseCancellationContext,
+  selectedCancellationNodeId,
+  showCancellationDiagnostics = true,
+  onCancelledNodeSelectionChange,
 }: DemandNetworkMapProps) {
-  const [selectedCancelledNodeId, setSelectedCancelledNodeId] = useState<number | null>(null);
+  const [uncontrolledCancelledNodeId, setUncontrolledCancelledNodeId] = useState<number | null>(null);
+  const selectedCancelledNodeId = selectedCancellationNodeId === undefined
+    ? uncontrolledCancelledNodeId
+    : selectedCancellationNodeId;
   const [selectedCancelledRequestId, setSelectedCancelledRequestId] = useState<number | null>(null);
   const [diagnosticsPosition, setDiagnosticsPosition] = useState<DiagnosticsPosition | null>(null);
   const diagnosticsRef = useRef<HTMLElement | null>(null);
@@ -476,10 +673,17 @@ export default function DemandNetworkMap({
 
   useEffect(() => {
     if (selectedCancelledNodeId != null && !cancelledByNode.has(selectedCancelledNodeId)) {
-      setSelectedCancelledNodeId(null);
+      if (selectedCancellationNodeId === undefined) setUncontrolledCancelledNodeId(null);
+      onCancelledNodeSelectionChange?.(null);
       onCloseCancellationContext?.();
     }
-  }, [cancelledByNode, onCloseCancellationContext, selectedCancelledNodeId]);
+  }, [
+    cancelledByNode,
+    onCancelledNodeSelectionChange,
+    onCloseCancellationContext,
+    selectedCancellationNodeId,
+    selectedCancelledNodeId,
+  ]);
 
   useEffect(() => {
     if (selectedCancelledNodeId == null || selectedCancelledPassengers.length === 0) {
@@ -500,13 +704,19 @@ export default function DemandNetworkMap({
     if (selectedCancelledNodeId == null) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        setSelectedCancelledNodeId(null);
+        if (selectedCancellationNodeId === undefined) setUncontrolledCancelledNodeId(null);
+        onCancelledNodeSelectionChange?.(null);
         onCloseCancellationContext?.();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onCloseCancellationContext, selectedCancelledNodeId]);
+  }, [
+    onCancelledNodeSelectionChange,
+    onCloseCancellationContext,
+    selectedCancellationNodeId,
+    selectedCancelledNodeId,
+  ]);
 
   const clampDiagnosticsPosition = (x: number, y: number): DiagnosticsPosition => {
     const popup = diagnosticsRef.current;
@@ -573,13 +783,15 @@ export default function DemandNetworkMap({
   };
   const toggleCancelledNode = (nodeId: number) => {
     if (selectedCancelledNodeId === nodeId) {
-      setSelectedCancelledNodeId(null);
+      if (selectedCancellationNodeId === undefined) setUncontrolledCancelledNodeId(null);
+      onCancelledNodeSelectionChange?.(null);
       onCloseCancellationContext?.();
       return;
     }
     const nodePassengers = cancelledByNode.get(nodeId) ?? [];
-    setSelectedCancelledNodeId(nodeId);
-    selectCancelledRequest(nodePassengers[0]);
+    if (selectedCancellationNodeId === undefined) setUncontrolledCancelledNodeId(nodeId);
+    onCancelledNodeSelectionChange?.({ nodeId, passengers: nodePassengers });
+    if (showCancellationDiagnostics) selectCancelledRequest(nodePassengers[0]);
   };
   const sharedMaximum = Math.max(
     0,
@@ -702,12 +914,12 @@ export default function DemandNetworkMap({
             <span><i style={{ background: CANCELLED_COLOR }} />Cancelled</span>
           </div>
         </div>
-        {selectedCancelledNodeId != null ? createPortal(
+        {showCancellationDiagnostics && selectedCancelledNodeId != null ? createPortal(
           <section
             ref={diagnosticsRef}
             className={`demand-cancellation-diagnostics${appearance === 'paper' ? ' is-paper' : ''}${diagnosticsPosition ? ' is-dragged' : ''}`}
             style={diagnosticsStyle}
-            aria-label={`Cancellation diagnostics for node ${selectedCancelledNodeId}`}
+            aria-label={`Request patterns for node ${selectedCancelledNodeId}`}
           >
             <div
               className="demand-cancellation-diagnostics-head"
@@ -717,15 +929,16 @@ export default function DemandNetworkMap({
               onPointerCancel={handleDiagnosticsPointerUp}
             >
               <div>
-                <strong>Cancellation Diagnostics - N{selectedCancelledNodeId}</strong>
+                <strong>Request Pattern Details - N{selectedCancelledNodeId}</strong>
                 <span>{selectedCancelledPassengers.length} cancelled requests</span>
               </div>
               <button
                 type="button"
                 className="demand-cancellation-close"
-                aria-label="Close cancellation diagnostics"
+                aria-label="Close request pattern details"
                 onClick={() => {
-                  setSelectedCancelledNodeId(null);
+                  if (selectedCancellationNodeId === undefined) setUncontrolledCancelledNodeId(null);
+                  onCancelledNodeSelectionChange?.(null);
                   onCloseCancellationContext?.();
                 }}
               >

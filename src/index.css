@@ -20,6 +20,8 @@
   --accent-red: #ef4444;
   --accent-purple: #8b5cf6;
   --accent-pink: #ec4899;
+  --operation-pickup-color: #d95f02;
+  --operation-dropoff-color: #1b9e77;
   --radius: 12px;
   --radius-sm: 8px;
 }
@@ -63,12 +65,67 @@ body.is-result-analysis-view {
 
 
 * {
-  scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
+/* Firefox fallback. Chromium must keep these properties at their `auto`
+   defaults or it ignores the WebKit rules that remove scrollbar buttons. */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.72) transparent;
+  }
+}
+
 *::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
+  width: 5px;
+  height: 5px;
+  background: transparent;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-track-piece {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-width: 24px;
+  min-height: 24px;
+  background: rgba(100, 116, 139, 0.72);
+  border: 0;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(71, 85, 105, 0.86);
+}
+
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:start,
+*::-webkit-scrollbar-button:end,
+*::-webkit-scrollbar-button:increment,
+*::-webkit-scrollbar-button:decrement,
+*::-webkit-scrollbar-button:horizontal,
+*::-webkit-scrollbar-button:vertical {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent !important;
+  border: 0 !important;
+}
+
+*::-webkit-scrollbar-corner,
+*::-webkit-resizer {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+  visibility: hidden;
 }
