@@ -14,6 +14,7 @@ import { ResultVehiclePatterns } from './VehicleTemporalComparisonCharts';
 import type {
   Passenger,
   ReplayDispatchDecision,
+  ReplayPassengerEvent,
   VehiclePatternSelection,
 } from '../types/simulation';
 import { frameAtOrBefore } from '../utils/replay';
@@ -84,6 +85,262 @@ function PatternModeToggle({
   );
 }
 
+function isCancelledRequest(passenger: Passenger): boolean {
+  return passenger.status === 'cancelled' || passenger.cancellationTime != null;
+}
+
+function isDeliveredRequest(passenger: Passenger): boolean {
+  return passenger.status === 'delivered' || passenger.deliveryTime != null;
+}
+
+function formatElapsed(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '-';
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+interface PassengerRideInterval {
+  passengerId: number;
+  passengerCount: number;
+  vehicleId: number;
+  pickupTime: number | null;
+  dropoffTime: number | null;
+}
+
+interface PassengerRideIndex {
+  byPassengerId: Map<number, PassengerRideInterval>;
+  byVehicleId: Map<number, PassengerRideInterval[]>;
+}
+
+interface DeliveredRequestMetrics {
+  pickupWait: number | null;
+  rideTime: number | null;
+  detourRatio: number | null;
+  averageCoRiders: number | null;
+}
+
+const EMPTY_DELIVERED_REQUEST_METRICS: DeliveredRequestMetrics = {
+  pickupWait: null,
+  rideTime: null,
+  detourRatio: null,
+  averageCoRiders: null,
+};
+
+function buildPassengerRideIndex(
+  passengerEvents: readonly ReplayPassengerEvent[],
+): PassengerRideIndex {
+  const byPassengerId = new Map<number, PassengerRideInterval>();
+
+  for (const event of passengerEvents) {
+    let interval = byPassengerId.get(event.passengerId);
+    if (!interval) {
+      interval = {
+        passengerId: event.passengerId,
+        passengerCount: Math.max(1, event.passengerCount),
+        vehicleId: event.vehicleId,
+        pickupTime: null,
+        dropoffTime: null,
+      };
+      byPassengerId.set(event.passengerId, interval);
+    }
+
+    interval.passengerCount = Math.max(interval.passengerCount, event.passengerCount);
+    if (event.type === 'pickup') {
+      interval.vehicleId = event.vehicleId;
+      interval.pickupTime = interval.pickupTime == null
+        ? event.time
+        : Math.min(interval.pickupTime, event.time);
+    } else {
+      interval.dropoffTime = interval.dropoffTime == null
+        ? event.time
+        : Math.max(interval.dropoffTime, event.time);
+    }
+  }
+
+  const byVehicleId = new Map<number, PassengerRideInterval[]>();
+  for (const interval of byPassengerId.values()) {
+    if (interval.pickupTime == null) continue;
+    const vehicleIntervals = byVehicleId.get(interval.vehicleId) ?? [];
+    vehicleIntervals.push(interval);
+    byVehicleId.set(interval.vehicleId, vehicleIntervals);
+  }
+
+  return { byPassengerId, byVehicleId };
+}
+
+function averageCoRiders(
+  passenger: Passenger,
+  rideIndex: PassengerRideIndex,
+): number | null {
+  const targetRide = rideIndex.byPassengerId.get(passenger.id);
+  if (
+    !targetRide ||
+    targetRide.pickupTime == null ||
+    targetRide.dropoffTime == null ||
+    targetRide.dropoffTime <= targetRide.pickupTime
+  ) {
+    return null;
+  }
+
+  const rideDuration = targetRide.dropoffTime - targetRide.pickupTime;
+  let sharedPassengerTime = 0;
+  const vehicleRides = rideIndex.byVehicleId.get(targetRide.vehicleId) ?? [];
+  for (const otherRide of vehicleRides) {
+    if (otherRide.passengerId === passenger.id || otherRide.pickupTime == null) continue;
+    const overlapStart = Math.max(targetRide.pickupTime, otherRide.pickupTime);
+    const overlapEnd = Math.min(
+      targetRide.dropoffTime,
+      otherRide.dropoffTime ?? targetRide.dropoffTime,
+    );
+    if (overlapStart >= overlapEnd) continue;
+    sharedPassengerTime += (overlapEnd - overlapStart) * otherRide.passengerCount;
+  }
+
+  return sharedPassengerTime / rideDuration;
+}
+
+function deliveredRequestMetrics(
+  passenger: Passenger,
+  rideIndex: PassengerRideIndex,
+): DeliveredRequestMetrics {
+  const pickupWait = passenger.pickupTime == null
+    ? null
+    : Math.max(0, passenger.pickupTime - passenger.requestTime);
+  const rideTime = passenger.pickupTime == null || passenger.deliveryTime == null
+    ? null
+    : Math.max(0, passenger.deliveryTime - passenger.pickupTime);
+  const directTravelTime = passenger.directTravelTime ?? null;
+  const detourRatio = rideTime != null && directTravelTime != null && directTravelTime > 0
+    ? rideTime / directTravelTime
+    : null;
+
+  return {
+    pickupWait,
+    rideTime,
+    detourRatio,
+    averageCoRiders: averageCoRiders(passenger, rideIndex),
+  };
+}
+
+function median(values: Array<number | null>): number | null {
+  const sorted = values
+    .filter((value): value is number => value != null && Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (sorted.length === 0) return null;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function medianDeliveredRequestMetrics(
+  metrics: DeliveredRequestMetrics[],
+): DeliveredRequestMetrics {
+  return {
+    pickupWait: median(metrics.map(metric => metric.pickupWait)),
+    rideTime: median(metrics.map(metric => metric.rideTime)),
+    detourRatio: median(metrics.map(metric => metric.detourRatio)),
+    averageCoRiders: median(metrics.map(metric => metric.averageCoRiders)),
+  };
+}
+
+function formatDetourRatio(value: number | null): string {
+  return value == null || !Number.isFinite(value) ? '-' : `${value.toFixed(2)}x`;
+}
+
+function formatAverageCoRiders(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '-';
+  return value.toFixed(2);
+}
+
+function DeliveredMetricGrid({
+  metrics,
+  ariaLabel,
+}: {
+  metrics: DeliveredRequestMetrics;
+  ariaLabel: string;
+}) {
+  return (
+    <dl className="delivered-request-metrics" aria-label={ariaLabel}>
+      <div><dt>Pickup wait</dt><dd>{formatElapsed(metrics.pickupWait)}</dd></div>
+      <div><dt>In-vehicle time</dt><dd>{formatElapsed(metrics.rideTime)}</dd></div>
+      <div><dt>Detour ratio</dt><dd>{formatDetourRatio(metrics.detourRatio)}</dd></div>
+      <div>
+        <dt title="Time-weighted average number of passengers from other requests onboard">
+          Average co-riders
+        </dt>
+        <dd>{formatAverageCoRiders(metrics.averageCoRiders)}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function DeliveredRequestSummary({
+  passenger,
+  metrics,
+  medianMetrics,
+  deliveredRequestCount,
+}: {
+  passenger: Passenger;
+  metrics: DeliveredRequestMetrics;
+  medianMetrics: DeliveredRequestMetrics;
+  deliveredRequestCount: number;
+}) {
+  const deliveryTime = passenger.deliveryTime ?? passenger.requestTime;
+  const assignmentTime = passenger.assignmentTime;
+  const pickupTime = passenger.pickupTime;
+  const totalDuration = Math.max(1, deliveryTime - passenger.requestTime);
+  const assignmentBoundary = Math.min(
+    deliveryTime,
+    Math.max(passenger.requestTime, assignmentTime ?? pickupTime ?? deliveryTime),
+  );
+  const pickupBoundary = Math.min(
+    deliveryTime,
+    Math.max(assignmentBoundary, pickupTime ?? deliveryTime),
+  );
+  const phaseWidths = {
+    queued: ((assignmentBoundary - passenger.requestTime) / totalDuration) * 100,
+    assigned: ((pickupBoundary - assignmentBoundary) / totalDuration) * 100,
+    onboard: ((deliveryTime - pickupBoundary) / totalDuration) * 100,
+  };
+  const passengerCount = Math.max(1, passenger.numPassengers ?? 1);
+
+  return (
+    <section className="delivered-request-summary" aria-label={`Delivered request R${passenger.id} summary`}>
+      <div className="delivered-request-meta">
+        <strong>R{passenger.id}</strong>
+        <span>
+          V{passenger.assignedVehicleId ?? '?'} · N{passenger.originNodeId} to N{passenger.destinationNodeId}
+          {' · '}{passengerCount} passenger{passengerCount === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <div className="delivered-request-lifecycle" aria-label="Delivered request lifecycle">
+        <div className="delivered-request-lifecycle-track">
+          <i className="is-queued" style={{ width: `${phaseWidths.queued}%` }} />
+          <i className="is-assigned" style={{ width: `${phaseWidths.assigned}%` }} />
+          <i className="is-onboard" style={{ width: `${phaseWidths.onboard}%` }} />
+        </div>
+      </div>
+
+      <DeliveredMetricGrid
+        metrics={metrics}
+        ariaLabel={`Delivered request R${passenger.id} metrics`}
+      />
+
+      <section className="delivered-request-benchmark">
+        <div className="delivered-request-benchmark-head">
+          <h4>All Delivered Median</h4>
+          <span>n={deliveredRequestCount}</span>
+        </div>
+        <DeliveredMetricGrid
+          metrics={medianMetrics}
+          ariaLabel={`Median metrics across ${deliveredRequestCount} delivered requests`}
+        />
+      </section>
+    </section>
+  );
+}
+
 export default function ResultAnalysis() {
   const [replay, setReplay] = useState<LoadedReplay | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -102,6 +359,24 @@ export default function ResultAnalysis() {
 
   const vehicleIds = useMemo(() => replayVehicleIds(replay), [replay]);
   const allRequests = useMemo(() => replayRequests(replay), [replay]);
+  const deliveredMetricContext = useMemo(() => {
+    const rideIndex = buildPassengerRideIndex(replay?.passengerEvents ?? []);
+    const byRequestId = new Map<number, DeliveredRequestMetrics>();
+    const allMetrics: DeliveredRequestMetrics[] = [];
+
+    for (const passenger of allRequests) {
+      if (!isDeliveredRequest(passenger)) continue;
+      const metrics = deliveredRequestMetrics(passenger, rideIndex);
+      byRequestId.set(passenger.id, metrics);
+      allMetrics.push(metrics);
+    }
+
+    return {
+      byRequestId,
+      medians: medianDeliveredRequestMetrics(allMetrics),
+      deliveredRequestCount: allMetrics.length,
+    };
+  }, [allRequests, replay]);
   const intervalStart = cancellationContext?.startTime ?? selectedSegment?.startTime;
   const intervalEnd = cancellationContext?.endTime ?? selectedSegment?.endTime;
   const displayTime = dispatchDecisionFocus?.time ?? intervalEnd ?? currentTime;
@@ -115,12 +390,22 @@ export default function ResultAnalysis() {
     passengerEvents: replay.passengerEvents,
     temporalIndex: replay.temporalIndex,
   } : null, [replay]);
+  const selectedRequest = useMemo<Passenger | null>(() => (
+    selectedRequestId == null
+      ? null
+      : allRequests.find(request => request.id === selectedRequestId) ?? null
+  ), [allRequests, selectedRequestId]);
   const selectedCancelledPassenger = useMemo<Passenger | null>(() => {
-    if (!cancelledNodeSelection) return null;
-    return cancelledNodeSelection.passengers.find(
-      passenger => passenger.id === selectedRequestId,
-    ) ?? cancelledNodeSelection.passengers[0] ?? null;
-  }, [cancelledNodeSelection, selectedRequestId]);
+    const passenger = cancelledNodeSelection
+      ? cancelledNodeSelection.passengers.find(request => request.id === selectedRequestId) ??
+        cancelledNodeSelection.passengers[0] ?? null
+      : selectedRequest;
+    return passenger && isCancelledRequest(passenger) ? passenger : null;
+  }, [cancelledNodeSelection, selectedRequest, selectedRequestId]);
+  const selectedDeliveredPassenger = useMemo<Passenger | null>(() => {
+    if (cancelledNodeSelection || !selectedRequest) return null;
+    return isDeliveredRequest(selectedRequest) ? selectedRequest : null;
+  }, [cancelledNodeSelection, selectedRequest]);
   const requestPatternPassengers = cancelledNodeSelection?.passengers ?? allRequests;
 
   const restorePatternModeAfterCancellation = useCallback(() => {
@@ -206,29 +491,36 @@ export default function ResultAnalysis() {
     restorePatternModeAfterCancellation();
   }, [restorePatternModeAfterCancellation]);
 
-  const handleCancelledNodeSelectionChange = useCallback((selection: CancelledNodeSelection | null) => {
+  const openCancellationSelection = useCallback((
+    selection: CancelledNodeSelection,
+    initialRequest: Passenger | undefined = selection.passengers[0],
+  ) => {
     setCancelledNodeSelection(selection);
-    if (!selection) {
-      setSelectedRequestId(null);
-      setAnalysisMapMode('activity');
-      return;
-    }
     if (cancelledNodeSelection == null && cancellationReturnPatternModeRef.current == null) {
       cancellationReturnPatternModeRef.current = patternMode;
     }
     setPatternMode('request');
-    const firstRequest = selection.passengers[0];
-    if (firstRequest) {
-      setSelectedRequestId(firstRequest.id);
+    if (initialRequest) {
+      setSelectedRequestId(initialRequest.id);
       handleCancellationContext({
-        requestId: firstRequest.id,
-        startTime: firstRequest.requestTime,
-        endTime: firstRequest.cancellationTime ?? firstRequest.requestTime,
+        requestId: initialRequest.id,
+        startTime: initialRequest.requestTime,
+        endTime: initialRequest.cancellationTime ?? initialRequest.requestTime,
       });
       return;
     }
     setAnalysisMapMode('demand');
   }, [cancelledNodeSelection, handleCancellationContext, patternMode]);
+
+  const handleCancelledNodeSelectionChange = useCallback((selection: CancelledNodeSelection | null) => {
+    if (!selection) {
+      setCancelledNodeSelection(null);
+      setSelectedRequestId(null);
+      setAnalysisMapMode('activity');
+      return;
+    }
+    openCancellationSelection(selection);
+  }, [openCancellationSelection]);
 
   const handleDispatchDecisionFocus = useCallback((decision: ReplayDispatchDecision | null) => {
     setDispatchDecisionFocus(decision);
@@ -236,14 +528,51 @@ export default function ResultAnalysis() {
   }, []);
 
   const handleRequestPatternSelect = useCallback((passenger: Passenger) => {
+    const isSameDirectCancellation =
+      cancelledNodeSelection == null &&
+      isCancelledRequest(passenger) &&
+      cancellationContext?.requestId === passenger.id;
+    const isSameDeliveredRequest =
+      cancelledNodeSelection == null &&
+      isDeliveredRequest(passenger) &&
+      selectedRequestId === passenger.id;
+    if (isSameDirectCancellation || isSameDeliveredRequest) {
+      setSelectedRequestId(null);
+      setSelectedSegment(null);
+      setDispatchDecisionFocus(null);
+      if (isSameDirectCancellation) closeCancellationContext();
+      setAnalysisMapMode('activity');
+      return;
+    }
+
     setSelectedRequestId(passenger.id);
-    if (!cancelledNodeSelection) return;
-    handleCancellationContext({
-      requestId: passenger.id,
-      startTime: passenger.requestTime,
-      endTime: passenger.cancellationTime ?? passenger.deliveryTime ?? passenger.requestTime,
-    });
-  }, [cancelledNodeSelection, handleCancellationContext]);
+    setSelectedSegment(null);
+    setDispatchDecisionFocus(null);
+    if (cancelledNodeSelection) {
+      handleCancellationContext({
+        requestId: passenger.id,
+        startTime: passenger.requestTime,
+        endTime: passenger.cancellationTime ?? passenger.requestTime,
+      });
+      return;
+    }
+    if (isCancelledRequest(passenger)) {
+      handleCancellationContext({
+        requestId: passenger.id,
+        startTime: passenger.requestTime,
+        endTime: passenger.cancellationTime ?? passenger.requestTime,
+      });
+      return;
+    }
+    if (cancellationContext) closeCancellationContext();
+    setAnalysisMapMode('activity');
+  }, [
+    cancellationContext,
+    cancelledNodeSelection,
+    closeCancellationContext,
+    handleCancellationContext,
+    selectedRequestId,
+  ]);
 
   const clearCancellationAnalysis = useCallback(() => {
     setCancelledNodeSelection(null);
@@ -330,7 +659,7 @@ export default function ResultAnalysis() {
       <main className="result-analysis-main">
         <section className="result-analysis-map-grid">
           <article className="panel result-analysis-map-panel">
-            {cancelledNodeSelection ? (
+            {cancelledNodeSelection || cancellationContext ? (
               <div className="result-analysis-map-panel-head">
                 <h3>
                   {analysisMapMode === 'demand'
@@ -382,7 +711,7 @@ export default function ResultAnalysis() {
                   dispatchDecisions={replay?.dispatchDecisions}
                   dispatchDecisionFocus={dispatchDecisionFocus}
                 />
-              ) : cancelledNodeSelection && analysisMapMode === 'demand' && demandNetworkMap ? (
+              ) : analysisMapMode === 'demand' && demandNetworkMap ? (
                 demandNetworkMap
               ) : (
                 <VehicleOperationMap
@@ -409,8 +738,10 @@ export default function ResultAnalysis() {
             <h3>
               {selectedSegment
                 ? 'Interval Demand Context'
-                : cancelledNodeSelection
+                : selectedCancelledPassenger
                   ? 'Cancellation Vehicle Status'
+                  : selectedDeliveredPassenger
+                    ? 'Delivered Request Summary'
                   : 'Demand Network Map'}
             </h3>
             <div className="result-analysis-map-body">
@@ -424,7 +755,7 @@ export default function ResultAnalysis() {
                   startTime={selectedSegment.startTime}
                   replayTime={selectedSegment.endTime}
                 />
-              ) : cancelledNodeSelection ? (
+              ) : selectedCancelledPassenger ? (
                 <div className="result-analysis-cancellation-pattern-body">
                   <CandidateAvailabilityTimeline
                     passenger={selectedCancelledPassenger}
@@ -434,6 +765,16 @@ export default function ResultAnalysis() {
                     hideHeading
                   />
                 </div>
+              ) : selectedDeliveredPassenger ? (
+                <DeliveredRequestSummary
+                  passenger={selectedDeliveredPassenger}
+                  metrics={
+                    deliveredMetricContext.byRequestId.get(selectedDeliveredPassenger.id) ??
+                    EMPTY_DELIVERED_REQUEST_METRICS
+                  }
+                  medianMetrics={deliveredMetricContext.medians}
+                  deliveredRequestCount={deliveredMetricContext.deliveredRequestCount}
+                />
               ) : demandNetworkMap ? (
                 demandNetworkMap
               ) : (
@@ -448,9 +789,11 @@ export default function ResultAnalysis() {
             <section className="vehicle-pattern-section result-analysis-pattern-section">
               <article className="panel vehicle-pattern-result-card result-analysis-request-pattern-card">
                 <div className="vehicle-pattern-result-head">
-                  <h3>Request Pattern</h3>
-                  <div className="vehicle-pattern-result-summary">
+                  <div className="vehicle-pattern-result-title">
+                    <h3>Request Pattern</h3>
                     <PatternModeToggle mode={patternMode} onChange={setPatternMode} />
+                  </div>
+                  <div className="vehicle-pattern-result-summary">
                     <div className="vehicle-pattern-head-legend">
                       <RequestPatternLegend inline />
                     </div>

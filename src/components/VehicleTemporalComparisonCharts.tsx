@@ -1357,9 +1357,11 @@ function ResultVehicleCard({
   return (
     <article className="panel vehicle-pattern-result-card">
       <div className="vehicle-pattern-result-head">
-        <h3 style={{ color }}>{title}</h3>
-        <div className="vehicle-pattern-result-summary">
+        <div className="vehicle-pattern-result-title">
+          <h3 style={{ color }}>{title}</h3>
           {headerControl}
+        </div>
+        <div className="vehicle-pattern-result-summary">
           <div className="vehicle-pattern-interaction-mode" aria-label={`${title} timeline interaction mode`}>
             <button
               type="button"
@@ -1388,24 +1390,28 @@ function ResultVehicleCard({
         </div>
       </div>
       <div ref={rowListRef} className="vehicle-pattern-row-list">
-        {vehicleIds.map(vehicleId => (
-          <VehiclePatternRow
-            key={`${title}-${vehicleId}`}
-            vehicleId={vehicleId}
-            resultSide={side}
-            resultLabel={title}
-            resultColor={color}
-            source={source}
-            currentTime={currentTime}
-            selectedSegment={selectedSegment}
-            contextInterval={contextInterval}
-            interactionMode={interactionMode}
-            maxEventGroupCount={maxEventGroupCount}
-            eventBoxWidth={eventBoxWidth}
-            dispatchDecisionFocus={dispatchDecisionFocus}
-            onSelectSegment={onSelectSegment}
-          />
-        ))}
+        {vehicleIds.length === 0 ? (
+          <div className="vehicle-pattern-list-empty">No vehicles available.</div>
+        ) : (
+          vehicleIds.map(vehicleId => (
+            <VehiclePatternRow
+              key={`${title}-${vehicleId}`}
+              vehicleId={vehicleId}
+              resultSide={side}
+              resultLabel={title}
+              resultColor={color}
+              source={source}
+              currentTime={currentTime}
+              selectedSegment={selectedSegment}
+              contextInterval={contextInterval}
+              interactionMode={interactionMode}
+              maxEventGroupCount={maxEventGroupCount}
+              eventBoxWidth={eventBoxWidth}
+              dispatchDecisionFocus={dispatchDecisionFocus}
+              onSelectSegment={onSelectSegment}
+            />
+          ))
+        )}
       </div>
     </article>
   );
