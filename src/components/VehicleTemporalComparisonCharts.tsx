@@ -1288,6 +1288,7 @@ function ResultVehicleCard({
   currentTime,
   selectedSegment,
   contextInterval,
+  contextVehicleId,
   maxEventGroupCount,
   dispatchDecisionFocus,
   headerControl,
@@ -1301,6 +1302,7 @@ function ResultVehicleCard({
   currentTime: number;
   selectedSegment: VehiclePatternSelection | null;
   contextInterval: TimelineDomain | null;
+  contextVehicleId?: number | null;
   maxEventGroupCount: number;
   dispatchDecisionFocus: ReplayDispatchDecision | null;
   headerControl?: ReactNode;
@@ -1403,7 +1405,11 @@ function ResultVehicleCard({
               source={source}
               currentTime={currentTime}
               selectedSegment={selectedSegment}
-              contextInterval={contextInterval}
+              contextInterval={
+                contextVehicleId === undefined || contextVehicleId === vehicleId
+                  ? contextInterval
+                  : null
+              }
               interactionMode={interactionMode}
               maxEventGroupCount={maxEventGroupCount}
               eventBoxWidth={eventBoxWidth}
@@ -1423,6 +1429,7 @@ export function ResultVehiclePatterns({
   currentTime,
   selectedSegment,
   contextInterval = null,
+  contextVehicleId,
   dispatchDecisionFocus = null,
   headerControl,
   onSelectSegment,
@@ -1432,6 +1439,7 @@ export function ResultVehiclePatterns({
   currentTime: number;
   selectedSegment: VehiclePatternSelection | null;
   contextInterval?: TimelineDomain | null;
+  contextVehicleId?: number | null;
   dispatchDecisionFocus?: ReplayDispatchDecision | null;
   headerControl?: ReactNode;
   onSelectSegment: (selection: VehiclePatternSelection) => void;
@@ -1455,6 +1463,7 @@ export function ResultVehiclePatterns({
         currentTime={currentTime}
         selectedSegment={selectedSegment}
         contextInterval={contextInterval}
+        contextVehicleId={contextVehicleId}
         dispatchDecisionFocus={dispatchDecisionFocus}
         headerControl={headerControl}
         maxEventGroupCount={maxEventGroupCount}
