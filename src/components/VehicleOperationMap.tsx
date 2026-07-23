@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type MouseEvent } from 'react';
 import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
 import type {
   ReplayVehicleMovement,
@@ -60,6 +60,15 @@ interface VehicleActivityCell {
   vehicleIds: Set<number>;
 }
 
+interface DistanceEdgeTooltipState {
+  edgeKey: string;
+  status: OperationHeatStatus;
+  x: number;
+  y: number;
+  horizontalPlacement: 'left' | 'right';
+  verticalPlacement: 'above' | 'below';
+}
+
 const PADDING = 46;
 const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
@@ -73,6 +82,9 @@ const EDGE_USAGE_LEGEND_LEVELS = [
 ] as const;
 
 const FILTERABLE_STATUSES: OperationHeatStatus[] = ['picking_up', 'carrying'];
+const ORIGINAL_EDGE_WEIGHTS = new Map(
+  undirectedLinks.map(link => [normalizeEdgeKey(link.from, link.to), link.distance]),
+);
 
 const STATUS_LABELS: Record<OperationHeatStatus, string> = {
   picking_up: 'Pickup',
@@ -299,6 +311,7 @@ export default function VehicleOperationMap({
     carrying: true,
   });
   const [localMode, setLocalMode] = useState<VehicleOperationMode>(defaultMode);
+  const [distanceEdgeTooltip, setDistanceEdgeTooltip] = useState<DistanceEdgeTooltipState | null>(null);
   const activeMode = mode ?? localMode;
   const visibleStatuses = statusVisibility ?? localStatusVisibility;
   const hasSelectedInterval = startTime != null;
@@ -413,6 +426,9 @@ export default function VehicleOperationMap({
     ),
     [visibleDistanceEdges, visibleStatuses],
   );
+  const hoveredDistanceEdge = distanceEdgeTooltip
+    ? visibleDistanceEdges.find(edge => edge.key === distanceEdgeTooltip.edgeKey)
+    : undefined;
   const kde = useMemo(() => {
     if (activeMode !== 'time-presence') {
       return buildSharedSpatialKde([], [], [], [], []);
@@ -467,8 +483,29 @@ export default function VehicleOperationMap({
     }
   };
   const handleModeChange = (nextMode: VehicleOperationMode) => {
+    setDistanceEdgeTooltip(null);
     if (mode === undefined) setLocalMode(nextMode);
     onModeChange?.(nextMode);
+  };
+  const updateDistanceEdgeTooltip = (
+    event: MouseEvent<SVGLineElement>,
+    edgeKey: string,
+    status: OperationHeatStatus,
+  ) => {
+    const container = event.currentTarget.ownerSVGElement?.parentElement;
+    if (!container) return;
+
+    const bounds = container.getBoundingClientRect();
+    const x = Math.min(bounds.width - 8, Math.max(8, event.clientX - bounds.left));
+    const y = Math.min(bounds.height - 8, Math.max(8, event.clientY - bounds.top));
+    setDistanceEdgeTooltip({
+      edgeKey,
+      status,
+      x,
+      y,
+      horizontalPlacement: x > bounds.width / 2 ? 'left' : 'right',
+      verticalPlacement: y > bounds.height / 2 ? 'above' : 'below',
+    });
   };
 
   return (
@@ -565,9 +602,11 @@ export default function VehicleOperationMap({
                         {...coordinates}
                         strokeWidth={strokeWidth}
                         className={`vehicle-operation-distance-edge is-${status === 'picking_up' ? 'pickup' : 'carrying'}`}
-                      >
-                        <title>{distanceEdgeTitle(edge, status)}</title>
-                      </line>,
+                        aria-label={distanceEdgeTitle(edge, status)}
+                        onMouseEnter={event => updateDistanceEdgeTooltip(event, edge.key, status)}
+                        onMouseMove={event => updateDistanceEdgeTooltip(event, edge.key, status)}
+                        onMouseLeave={() => setDistanceEdgeTooltip(null)}
+                      />,
                     ];
                   });
                 })}
@@ -616,7 +655,7 @@ export default function VehicleOperationMap({
 
             {nodes.map(node => (
               <g key={`vehicle-operation-node-${node.id}`} className="vehicle-operation-node">
-                <circle cx={node.x} cy={node.y} r={4.5} />
+                <circle cx={node.x} cy={node.y} r={3.2} />
                 {showNodeLabels ? (
                   <text x={node.x} y={node.y + 0.4} textAnchor="middle" dominantBaseline="middle">
                     {node.label}
@@ -653,6 +692,45 @@ export default function VehicleOperationMap({
               );
             }) : null}
           </svg>
+          {distanceEdgeTooltip && hoveredDistanceEdge ? (
+            <div
+              className={`map-hover-tooltip is-${distanceEdgeTooltip.horizontalPlacement} is-${distanceEdgeTooltip.verticalPlacement}`}
+              style={{ left: distanceEdgeTooltip.x, top: distanceEdgeTooltip.y }}
+              role="tooltip"
+            >
+              <div className="map-hover-tooltip-values">
+                <div>
+                  <span>Edge</span>
+                  <b>{hoveredDistanceEdge.fromNodeId} ↔ {hoveredDistanceEdge.toNodeId}</b>
+                </div>
+                <div>
+                  <span>Original weight</span>
+                  <b>{formatNetworkDistance(ORIGINAL_EDGE_WEIGHTS.get(hoveredDistanceEdge.key) ?? 0)}</b>
+                </div>
+                <div>
+                  <span>Traversals</span>
+                  <b>{hoveredDistanceEdge.statusMovementCounts[distanceEdgeTooltip.status]}</b>
+                </div>
+                <div>
+                  <span>Weighted usage</span>
+                  <b>{formatNetworkDistance(hoveredDistanceEdge.statusDistances[distanceEdgeTooltip.status])}</b>
+                </div>
+                <div className="vehicle-operation-edge-tooltip-directions">
+                  <span>Direction</span>
+                  <div>
+                    {hoveredDistanceEdge.directions
+                      .filter(direction => direction.status === distanceEdgeTooltip.status)
+                      .map(direction => (
+                        <span key={`${direction.fromNodeId}-${direction.toNodeId}`}>
+                          <b>{direction.fromNodeId} → {direction.toNodeId}</b>
+                          <small>{formatNetworkDistance(direction.distance)} / x{direction.movementCount}</small>
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
           {!hasVisibleMapData ? (
             <p className="vehicle-operation-empty">{emptyText}</p>
           ) : null}

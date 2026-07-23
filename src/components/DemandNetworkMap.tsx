@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import type {
+  CSSProperties,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
 import {
@@ -19,10 +23,13 @@ export interface CancellationAnalysisContext {
   endTime: number;
 }
 
-export interface CancelledNodeSelection {
+export interface DemandNodeSelection {
   nodeId: number;
   passengers: Passenger[];
 }
+
+export type AcceptedNodeSelection = DemandNodeSelection;
+export type CancelledNodeSelection = DemandNodeSelection;
 
 interface DemandNetworkMapProps {
   passengers: Passenger[];
@@ -40,8 +47,10 @@ interface DemandNetworkMapProps {
   onSelectDispatchDecision?: (decision: ReplayDispatchDecision | null) => void;
   onCloseCancellationContext?: () => void;
   selectedCancellationNodeId?: number | null;
+  selectedAcceptedNodeId?: number | null;
   showCancellationDiagnostics?: boolean;
   onCancelledNodeSelectionChange?: (selection: CancelledNodeSelection | null) => void;
+  onAcceptedNodeSelectionChange?: (selection: AcceptedNodeSelection | null) => void;
 }
 
 interface NodeDemand {
@@ -63,6 +72,15 @@ interface DiagnosticsDragState {
   startClientY: number;
   startX: number;
   startY: number;
+}
+
+interface DemandNodeTooltipState {
+  nodeId: number;
+  highlightedOutcome: 'accepted' | 'cancelled' | null;
+  x: number;
+  y: number;
+  horizontalPlacement: 'left' | 'right';
+  verticalPlacement: 'above' | 'below';
 }
 
 const PADDING = 22;
@@ -175,6 +193,39 @@ function buildNodeDemand(passengers: Passenger[], replayTime: number): NodeDeman
     demandByNode.set(passenger.originNodeId, demand);
   }
   return [...demandByNode.values()];
+}
+
+function buildOutcomePassengersByNode(
+  passengers: Passenger[],
+  replayTime: number,
+  outcome: 'accepted' | 'cancelled',
+): Map<number, Passenger[]> {
+  const byNode = new Map<number, Passenger[]>();
+  for (const passenger of passengers) {
+    if (passenger.requestTime > replayTime) continue;
+    const matchesOutcome = outcome === 'cancelled'
+      ? passenger.status === 'cancelled' &&
+        (passenger.cancellationTime == null || passenger.cancellationTime <= replayTime)
+      : passenger.status !== 'cancelled' && passenger.assignedVehicleId != null;
+    if (!matchesOutcome) continue;
+
+    const nodePassengers = byNode.get(passenger.originNodeId) ?? [];
+    nodePassengers.push(passenger);
+    byNode.set(passenger.originNodeId, nodePassengers);
+  }
+
+  for (const nodePassengers of byNode.values()) {
+    nodePassengers.sort((a, b) => {
+      const aTime = outcome === 'cancelled'
+        ? a.cancellationTime ?? a.requestTime
+        : a.assignmentTime ?? a.pickupTime ?? a.deliveryTime ?? a.requestTime;
+      const bTime = outcome === 'cancelled'
+        ? b.cancellationTime ?? b.requestTime
+        : b.assignmentTime ?? b.pickupTime ?? b.deliveryTime ?? b.requestTime;
+      return aTime - bTime || a.id - b.id;
+    });
+  }
+  return byNode;
 }
 
 function demandRadius(total: number, sharedMaximum: number): number {
@@ -617,14 +668,17 @@ export default function DemandNetworkMap({
   onSelectDispatchDecision,
   onCloseCancellationContext,
   selectedCancellationNodeId,
+  selectedAcceptedNodeId = null,
   showCancellationDiagnostics = true,
   onCancelledNodeSelectionChange,
+  onAcceptedNodeSelectionChange,
 }: DemandNetworkMapProps) {
   const [uncontrolledCancelledNodeId, setUncontrolledCancelledNodeId] = useState<number | null>(null);
   const selectedCancelledNodeId = selectedCancellationNodeId === undefined
     ? uncontrolledCancelledNodeId
     : selectedCancellationNodeId;
   const [selectedCancelledRequestId, setSelectedCancelledRequestId] = useState<number | null>(null);
+  const [nodeTooltip, setNodeTooltip] = useState<DemandNodeTooltipState | null>(null);
   const [diagnosticsPosition, setDiagnosticsPosition] = useState<DiagnosticsPosition | null>(null);
   const diagnosticsRef = useRef<HTMLElement | null>(null);
   const diagnosticsDragRef = useRef<DiagnosticsDragState | null>(null);
@@ -642,34 +696,23 @@ export default function DemandNetworkMap({
     () => new Map(demand.map(nodeDemand => [nodeDemand.nodeId, nodeDemand])),
     [demand],
   );
-  const cancelledByNode = useMemo(() => {
-    const byNode = new Map<number, Passenger[]>();
-    for (const passenger of passengers) {
-      if (
-        passenger.status !== 'cancelled' ||
-        passenger.requestTime > replayTime ||
-        (passenger.cancellationTime != null && passenger.cancellationTime > replayTime)
-      ) {
-        continue;
-      }
-      const nodePassengers = byNode.get(passenger.originNodeId) ?? [];
-      nodePassengers.push(passenger);
-      byNode.set(passenger.originNodeId, nodePassengers);
-    }
-    for (const nodePassengers of byNode.values()) {
-      nodePassengers.sort((a, b) =>
-        (a.cancellationTime ?? a.requestTime) - (b.cancellationTime ?? b.requestTime) ||
-        a.id - b.id,
-      );
-    }
-    return byNode;
-  }, [passengers, replayTime]);
+  const cancelledByNode = useMemo(
+    () => buildOutcomePassengersByNode(passengers, replayTime, 'cancelled'),
+    [passengers, replayTime],
+  );
+  const acceptedByNode = useMemo(
+    () => buildOutcomePassengersByNode(passengers, replayTime, 'accepted'),
+    [passengers, replayTime],
+  );
   const selectedCancelledPassengers = selectedCancelledNodeId == null
     ? []
     : (cancelledByNode.get(selectedCancelledNodeId) ?? []);
   const selectedCancelledPassenger = selectedCancelledPassengers.find(
     passenger => passenger.id === selectedCancelledRequestId,
   ) ?? null;
+  const hoveredNodeDemand = nodeTooltip == null
+    ? null
+    : demandByNode.get(nodeTooltip.nodeId) ?? null;
 
   useEffect(() => {
     if (selectedCancelledNodeId != null && !cancelledByNode.has(selectedCancelledNodeId)) {
@@ -684,6 +727,12 @@ export default function DemandNetworkMap({
     selectedCancellationNodeId,
     selectedCancelledNodeId,
   ]);
+
+  useEffect(() => {
+    if (selectedAcceptedNodeId != null && !acceptedByNode.has(selectedAcceptedNodeId)) {
+      onAcceptedNodeSelectionChange?.(null);
+    }
+  }, [acceptedByNode, onAcceptedNodeSelectionChange, selectedAcceptedNodeId]);
 
   useEffect(() => {
     if (selectedCancelledNodeId == null || selectedCancelledPassengers.length === 0) {
@@ -793,6 +842,42 @@ export default function DemandNetworkMap({
     onCancelledNodeSelectionChange?.({ nodeId, passengers: nodePassengers });
     if (showCancellationDiagnostics) selectCancelledRequest(nodePassengers[0]);
   };
+  const toggleAcceptedNode = (nodeId: number) => {
+    if (!onAcceptedNodeSelectionChange) return;
+    if (selectedAcceptedNodeId === nodeId) {
+      onAcceptedNodeSelectionChange(null);
+      return;
+    }
+    onAcceptedNodeSelectionChange({
+      nodeId,
+      passengers: acceptedByNode.get(nodeId) ?? [],
+    });
+  };
+  const updateNodeTooltip = (
+    event: ReactMouseEvent<SVGGElement>,
+    nodeId: number,
+  ) => {
+    const container = event.currentTarget.ownerSVGElement?.parentElement;
+    if (!container) return;
+
+    const bounds = container.getBoundingClientRect();
+    const x = Math.min(bounds.width - 8, Math.max(8, event.clientX - bounds.left));
+    const y = Math.min(bounds.height - 8, Math.max(8, event.clientY - bounds.top));
+    const target = event.target as SVGElement;
+    const highlightedOutcome = target.classList.contains('demand-network-accepted-sector')
+      ? 'accepted'
+      : target.classList.contains('demand-network-cancelled-sector')
+        ? 'cancelled'
+        : null;
+    setNodeTooltip({
+      nodeId,
+      highlightedOutcome,
+      x,
+      y,
+      horizontalPlacement: x > bounds.width / 2 ? 'left' : 'right',
+      verticalPlacement: y > bounds.height / 2 ? 'above' : 'below',
+    });
+  };
   const sharedMaximum = Math.max(
     0,
     ...demand.map(nodeDemand => nodeDemand.total),
@@ -852,7 +937,13 @@ export default function DemandNetworkMap({
                 acceptedRatio + cancelledRatio,
               );
               return (
-                <g key={`demand-node-${node.id}`} className="demand-network-node">
+                <g
+                  key={`demand-node-${node.id}`}
+                  className="demand-network-node"
+                  onMouseEnter={event => updateNodeTooltip(event, node.id)}
+                  onMouseMove={event => updateNodeTooltip(event, node.id)}
+                  onMouseLeave={() => setNodeTooltip(null)}
+                >
                   <circle
                     cx={node.x}
                     cy={node.y}
@@ -860,12 +951,33 @@ export default function DemandNetworkMap({
                     fill={total > 0 ? PENDING_COLOR : '#ffffff'}
                     stroke={total > 0 ? '#f8fafc' : '#64748b'}
                     strokeWidth={total > 0 ? 0.9 : 0.7}
-                  >
-                    <title>
-                      {`N${node.id}: ${total} requests · Accepted ${nodeDemand?.accepted ?? 0} · Pending ${nodeDemand?.pending ?? 0} · Cancelled ${nodeDemand?.cancelled ?? 0}`}
-                    </title>
-                  </circle>
-                  {acceptedPath ? <path d={acceptedPath} fill={ACCEPT_COLOR} pointerEvents="none" /> : null}
+                    aria-label={`N${node.id}: ${total} requests, ${nodeDemand?.accepted ?? 0} accepted, ${nodeDemand?.pending ?? 0} pending, ${nodeDemand?.cancelled ?? 0} cancelled`}
+                  />
+                  {acceptedPath ? (
+                    <path
+                      d={acceptedPath}
+                      fill={ACCEPT_COLOR}
+                      className={`demand-network-accepted-sector${onAcceptedNodeSelectionChange ? ' is-interactive' : ''}${selectedAcceptedNodeId === node.id ? ' is-selected' : ''}`}
+                      role={onAcceptedNodeSelectionChange ? 'button' : undefined}
+                      tabIndex={onAcceptedNodeSelectionChange ? 0 : undefined}
+                      aria-label={onAcceptedNodeSelectionChange
+                        ? `Show ${nodeDemand?.accepted ?? 0} accepted requests at node ${node.id}`
+                        : undefined}
+                      aria-pressed={onAcceptedNodeSelectionChange
+                        ? selectedAcceptedNodeId === node.id
+                        : undefined}
+                      onClick={onAcceptedNodeSelectionChange
+                        ? () => toggleAcceptedNode(node.id)
+                        : undefined}
+                      onKeyDown={onAcceptedNodeSelectionChange
+                        ? event => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return;
+                          event.preventDefault();
+                          toggleAcceptedNode(node.id);
+                        }
+                        : undefined}
+                    />
+                  ) : null}
                   {cancelledPath ? (
                     <path
                       d={cancelledPath}
@@ -881,9 +993,7 @@ export default function DemandNetworkMap({
                         event.preventDefault();
                         toggleCancelledNode(node.id);
                       }}
-                    >
-                      <title>{`Inspect ${nodeDemand?.cancelled ?? 0} cancellations at N${node.id}`}</title>
-                    </path>
+                    />
                   ) : null}
                   {showNodeLabels ? (
                     <text
@@ -900,6 +1010,40 @@ export default function DemandNetworkMap({
               );
             })}
           </svg>
+          {nodeTooltip ? (
+            <div
+              className={`map-hover-tooltip is-${nodeTooltip.horizontalPlacement} is-${nodeTooltip.verticalPlacement}`}
+              style={{ left: nodeTooltip.x, top: nodeTooltip.y }}
+              role="tooltip"
+            >
+              <div className="map-hover-tooltip-values">
+                <div>
+                  <span>Node</span>
+                  <b>N{nodeTooltip.nodeId}</b>
+                </div>
+                <div>
+                  <span>Requests</span>
+                  <b>{hoveredNodeDemand?.total ?? 0}</b>
+                </div>
+                <div
+                  className={`demand-network-tooltip-metric is-accepted${nodeTooltip.highlightedOutcome === 'accepted' ? ' is-highlighted' : ''}`}
+                >
+                  <span>Accepted</span>
+                  <b>{hoveredNodeDemand?.accepted ?? 0}</b>
+                </div>
+                <div>
+                  <span>Pending</span>
+                  <b>{hoveredNodeDemand?.pending ?? 0}</b>
+                </div>
+                <div
+                  className={`demand-network-tooltip-metric is-cancelled${nodeTooltip.highlightedOutcome === 'cancelled' ? ' is-highlighted' : ''}`}
+                >
+                  <span>Cancelled</span>
+                  <b>{hoveredNodeDemand?.cancelled ?? 0}</b>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
         <div className="demand-network-footer">
           <div className="demand-network-totals">

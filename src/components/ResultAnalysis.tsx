@@ -4,6 +4,7 @@ import DemandNetworkMap, {
   CandidateAvailabilityTimeline,
   RequestPatternLegend,
   RequestPatternPanel,
+  type AcceptedNodeSelection,
   type CancellationAnalysisContext,
   type CancelledNodeSelection,
 } from './DemandNetworkMap';
@@ -255,15 +256,25 @@ function formatAverageCoRiders(value: number | null): string {
 function DeliveredMetricGrid({
   metrics,
   ariaLabel,
+  directTravelTime,
 }: {
   metrics: DeliveredRequestMetrics;
   ariaLabel: string;
+  directTravelTime?: number | null;
 }) {
   return (
     <dl className="delivered-request-metrics" aria-label={ariaLabel}>
       <div><dt>Pickup wait</dt><dd>{formatElapsed(metrics.pickupWait)}</dd></div>
       <div><dt>In-vehicle time</dt><dd>{formatElapsed(metrics.rideTime)}</dd></div>
-      <div><dt>Detour ratio</dt><dd>{formatDetourRatio(metrics.detourRatio)}</dd></div>
+      <div>
+        <dt>Detour ratio</dt>
+        <dd>
+          {formatDetourRatio(metrics.detourRatio)}
+          {directTravelTime !== undefined
+            ? ` (direct ${formatElapsed(directTravelTime)})`
+            : null}
+        </dd>
+      </div>
       <div>
         <dt title="Time-weighted average number of passengers from other requests onboard">
           Average co-riders
@@ -320,11 +331,26 @@ function DeliveredRequestSummary({
           <i className="is-assigned" style={{ width: `${phaseWidths.assigned}%` }} />
           <i className="is-onboard" style={{ width: `${phaseWidths.onboard}%` }} />
         </div>
+        <div className="delivered-request-lifecycle-legend">
+          <span>
+            <i className="is-queued" />
+            <b>Queued</b>
+          </span>
+          <span>
+            <i className="is-assigned" />
+            <b>Assigned</b>
+          </span>
+          <span>
+            <i className="is-onboard" />
+            <b>Onboard</b>
+          </span>
+        </div>
       </div>
 
       <DeliveredMetricGrid
         metrics={metrics}
         ariaLabel={`Delivered request R${passenger.id} metrics`}
+        directTravelTime={passenger.directTravelTime ?? null}
       />
 
       <section className="delivered-request-benchmark">
@@ -352,9 +378,10 @@ export default function ResultAnalysis() {
   const [analysisMapMode, setAnalysisMapMode] = useState<AnalysisMapMode>('activity');
   const [patternMode, setPatternMode] = useState<PatternMode>('vehicle');
   const [cancelledNodeSelection, setCancelledNodeSelection] = useState<CancelledNodeSelection | null>(null);
+  const [acceptedNodeSelection, setAcceptedNodeSelection] = useState<AcceptedNodeSelection | null>(null);
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
   const cancellationReturnTimeRef = useRef<number | null>(null);
-  const cancellationReturnPatternModeRef = useRef<PatternMode | null>(null);
+  const nodeFilterReturnPatternModeRef = useRef<PatternMode | null>(null);
   const fileLoadIdRef = useRef(0);
 
   const vehicleIds = useMemo(() => replayVehicleIds(replay), [replay]);
@@ -406,11 +433,14 @@ export default function ResultAnalysis() {
     if (cancelledNodeSelection || !selectedRequest) return null;
     return isDeliveredRequest(selectedRequest) ? selectedRequest : null;
   }, [cancelledNodeSelection, selectedRequest]);
-  const requestPatternPassengers = cancelledNodeSelection?.passengers ?? allRequests;
+  const requestPatternPassengers = acceptedNodeSelection?.passengers ??
+    cancelledNodeSelection?.passengers ??
+    allRequests;
+  const showAnalysisMapToggle = cancelledNodeSelection != null || cancellationContext != null;
 
-  const restorePatternModeAfterCancellation = useCallback(() => {
-    const returnMode = cancellationReturnPatternModeRef.current;
-    cancellationReturnPatternModeRef.current = null;
+  const restorePatternModeAfterNodeFilter = useCallback(() => {
+    const returnMode = nodeFilterReturnPatternModeRef.current;
+    nodeFilterReturnPatternModeRef.current = null;
     if (returnMode != null) setPatternMode(returnMode);
   }, []);
 
@@ -422,7 +452,7 @@ export default function ResultAnalysis() {
       const parsed = await loadReplayFile(file);
       if (loadId !== fileLoadIdRef.current) return;
       cancellationReturnTimeRef.current = null;
-      cancellationReturnPatternModeRef.current = null;
+      nodeFilterReturnPatternModeRef.current = null;
       startTransition(() => {
         setReplay(parsed);
         setCurrentTime(parsed.timeMax);
@@ -432,6 +462,7 @@ export default function ResultAnalysis() {
         setAnalysisMapMode('activity');
         setPatternMode('vehicle');
         setCancelledNodeSelection(null);
+        setAcceptedNodeSelection(null);
         setSelectedRequestId(null);
       });
     } catch (error) {
@@ -444,10 +475,11 @@ export default function ResultAnalysis() {
     setCancellationContext(null);
     setDispatchDecisionFocus(null);
     setCancelledNodeSelection(null);
+    setAcceptedNodeSelection(null);
     setSelectedRequestId(null);
     setAnalysisMapMode('activity');
     cancellationReturnTimeRef.current = null;
-    cancellationReturnPatternModeRef.current = null;
+    nodeFilterReturnPatternModeRef.current = null;
     setSelectedSegment(previous => {
       const isSame = previous?.vehicleId === selection.vehicleId &&
         previous.startTime === selection.startTime &&
@@ -463,10 +495,11 @@ export default function ResultAnalysis() {
     setCancellationContext(null);
     setDispatchDecisionFocus(null);
     setCancelledNodeSelection(null);
+    setAcceptedNodeSelection(null);
     setSelectedRequestId(null);
     setAnalysisMapMode('activity');
     cancellationReturnTimeRef.current = null;
-    restorePatternModeAfterCancellation();
+    restorePatternModeAfterNodeFilter();
   };
 
   const handleCancellationContext = useCallback((context: CancellationAnalysisContext) => {
@@ -488,16 +521,21 @@ export default function ResultAnalysis() {
     setDispatchDecisionFocus(null);
     if (returnTime != null) setCurrentTime(returnTime);
     setAnalysisMapMode(previous => previous === 'snapshot' ? 'demand' : previous);
-    restorePatternModeAfterCancellation();
-  }, [restorePatternModeAfterCancellation]);
+    restorePatternModeAfterNodeFilter();
+  }, [restorePatternModeAfterNodeFilter]);
 
   const openCancellationSelection = useCallback((
     selection: CancelledNodeSelection,
     initialRequest: Passenger | undefined = selection.passengers[0],
   ) => {
     setCancelledNodeSelection(selection);
-    if (cancelledNodeSelection == null && cancellationReturnPatternModeRef.current == null) {
-      cancellationReturnPatternModeRef.current = patternMode;
+    setAcceptedNodeSelection(null);
+    if (
+      cancelledNodeSelection == null &&
+      acceptedNodeSelection == null &&
+      nodeFilterReturnPatternModeRef.current == null
+    ) {
+      nodeFilterReturnPatternModeRef.current = patternMode;
     }
     setPatternMode('request');
     if (initialRequest) {
@@ -510,7 +548,7 @@ export default function ResultAnalysis() {
       return;
     }
     setAnalysisMapMode('demand');
-  }, [cancelledNodeSelection, handleCancellationContext, patternMode]);
+  }, [acceptedNodeSelection, cancelledNodeSelection, handleCancellationContext, patternMode]);
 
   const handleCancelledNodeSelectionChange = useCallback((selection: CancelledNodeSelection | null) => {
     if (!selection) {
@@ -521,6 +559,39 @@ export default function ResultAnalysis() {
     }
     openCancellationSelection(selection);
   }, [openCancellationSelection]);
+
+  const handleAcceptedNodeSelectionChange = useCallback((selection: AcceptedNodeSelection | null) => {
+    if (!selection) {
+      setAcceptedNodeSelection(null);
+      setSelectedRequestId(null);
+      restorePatternModeAfterNodeFilter();
+      return;
+    }
+
+    if (
+      acceptedNodeSelection == null &&
+      cancelledNodeSelection == null &&
+      nodeFilterReturnPatternModeRef.current == null
+    ) {
+      nodeFilterReturnPatternModeRef.current = patternMode;
+    }
+    const returnTime = cancellationReturnTimeRef.current;
+    cancellationReturnTimeRef.current = null;
+    setCancellationContext(null);
+    setDispatchDecisionFocus(null);
+    setSelectedSegment(null);
+    setCancelledNodeSelection(null);
+    setAcceptedNodeSelection(selection);
+    setSelectedRequestId(null);
+    if (returnTime != null) setCurrentTime(returnTime);
+    setAnalysisMapMode('activity');
+    setPatternMode('request');
+  }, [
+    acceptedNodeSelection,
+    cancelledNodeSelection,
+    patternMode,
+    restorePatternModeAfterNodeFilter,
+  ]);
 
   const handleDispatchDecisionFocus = useCallback((decision: ReplayDispatchDecision | null) => {
     setDispatchDecisionFocus(decision);
@@ -592,8 +663,10 @@ export default function ResultAnalysis() {
       dispatchDecisions={replay.dispatchDecisions}
       selectedDispatchDecision={dispatchDecisionFocus}
       selectedCancellationNodeId={cancelledNodeSelection?.nodeId ?? null}
+      selectedAcceptedNodeId={acceptedNodeSelection?.nodeId ?? null}
       showCancellationDiagnostics={false}
       onCancelledNodeSelectionChange={handleCancelledNodeSelectionChange}
+      onAcceptedNodeSelectionChange={handleAcceptedNodeSelectionChange}
       onSelectCancellationContext={handleCancellationContext}
       onSelectDispatchDecision={handleDispatchDecisionFocus}
       onCloseCancellationContext={closeCancellationContext}
@@ -658,48 +731,50 @@ export default function ResultAnalysis() {
 
       <main className="result-analysis-main">
         <section className="result-analysis-map-grid">
-          <article className="panel result-analysis-map-panel">
-            {cancelledNodeSelection || cancellationContext ? (
-              <div className="result-analysis-map-panel-head">
-                <h3>
-                  {analysisMapMode === 'demand'
-                    ? 'Demand Network Map'
-                    : analysisMapMode === 'snapshot' && cancellationContext
-                      ? 'Vehicle & Request Snapshot'
-                      : 'Vehicle Distance Flow'}
-                </h3>
-                <div className="result-analysis-map-toggle" role="group" aria-label="Analysis map">
+          <article
+            className={`panel result-analysis-map-panel${showAnalysisMapToggle ? ' has-analysis-map-toggle' : ''}`}
+          >
+            <h3 className="result-analysis-map-title">
+              {analysisMapMode === 'demand'
+                ? 'Demand Network Map'
+                : analysisMapMode === 'snapshot' && cancellationContext
+                  ? 'Vehicle & Request Snapshot'
+                  : 'Vehicle Distance Flow'}
+            </h3>
+            {showAnalysisMapToggle ? (
+              <div
+                className="result-analysis-map-toggle is-panel-overlay"
+                role="group"
+                aria-label="Analysis map"
+              >
+                <button
+                  type="button"
+                  className={analysisMapMode === 'activity' ? 'is-active' : ''}
+                  aria-pressed={analysisMapMode === 'activity'}
+                  onClick={() => setAnalysisMapMode('activity')}
+                >
+                  Vehicle Distance Flow
+                </button>
+                <button
+                  type="button"
+                  className={analysisMapMode === 'demand' ? 'is-active' : ''}
+                  aria-pressed={analysisMapMode === 'demand'}
+                  onClick={() => setAnalysisMapMode('demand')}
+                >
+                  Demand Network
+                </button>
+                {cancellationContext ? (
                   <button
                     type="button"
-                    className={analysisMapMode === 'activity' ? 'is-active' : ''}
-                    aria-pressed={analysisMapMode === 'activity'}
-                    onClick={() => setAnalysisMapMode('activity')}
+                    className={analysisMapMode === 'snapshot' ? 'is-active' : ''}
+                    aria-pressed={analysisMapMode === 'snapshot'}
+                    onClick={() => setAnalysisMapMode('snapshot')}
                   >
-                    Vehicle Distance Flow
+                    Snapshot
                   </button>
-                  <button
-                    type="button"
-                    className={analysisMapMode === 'demand' ? 'is-active' : ''}
-                    aria-pressed={analysisMapMode === 'demand'}
-                    onClick={() => setAnalysisMapMode('demand')}
-                  >
-                    Demand Network
-                  </button>
-                  {cancellationContext ? (
-                    <button
-                      type="button"
-                      className={analysisMapMode === 'snapshot' ? 'is-active' : ''}
-                      aria-pressed={analysisMapMode === 'snapshot'}
-                      onClick={() => setAnalysisMapMode('snapshot')}
-                    >
-                      Snapshot
-                    </button>
-                  ) : null}
-                </div>
+                ) : null}
               </div>
-            ) : (
-              <h3>Vehicle Distance Flow</h3>
-            )}
+            ) : null}
             <div className="result-analysis-map-body">
               {!replay ? (
                 <div className="compare-empty-text">Load a replay JSON file.</div>
@@ -799,7 +874,11 @@ export default function ResultAnalysis() {
                     </div>
                     <span className="vehicle-pattern-result-count">
                       {requestPatternPassengers.length} requests
-                      {cancelledNodeSelection ? ` · N${cancelledNodeSelection.nodeId}` : ''}
+                      {acceptedNodeSelection
+                        ? ` · N${acceptedNodeSelection.nodeId} Accepted`
+                        : cancelledNodeSelection
+                          ? ` · N${cancelledNodeSelection.nodeId} Cancelled`
+                          : ''}
                     </span>
                   </div>
                 </div>
