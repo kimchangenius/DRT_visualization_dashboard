@@ -86,6 +86,11 @@ interface DemandNodeTooltipState {
 const PADDING = 22;
 const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
+const CANDIDATE_TRACK_MIN_HEIGHT = 38;
+const DECISION_MARKER_WIDTH = 34;
+const DECISION_MARKER_HEIGHT = 23;
+const DECISION_MARKER_STACK_STEP = 21;
+const DECISION_MARKER_STACK_PADDING = 8;
 // ColorBrewer Set1 outcomes do not reuse operational event hues.
 const ACCEPT_COLOR = REQUEST_OUTCOME_COLORS.accepted;
 const PENDING_COLOR = REQUEST_OUTCOME_COLORS.pending;
@@ -102,7 +107,8 @@ const CANCELLATION_CATEGORY_META = {
     color: '#cb181d',
   },
 } as const;
-// D3/ColorBrewer Set2: muted hues distinguish nominal feasibility categories.
+// D3 categorical schemes: neutral gray marks vehicles already in service,
+// while muted Set2 hues distinguish constraint and assignability states.
 const FEASIBILITY_STATUS_META = [
   {
     key: 'unavailableVehicleCount',
@@ -136,11 +142,6 @@ const FEASIBILITY_STATUS_META = [
   },
 ] as const;
 const FEASIBILITY_LEGEND_META = [
-  {
-    key: 'in-service',
-    label: 'In service',
-    color: CANCELLATION_ANALYSIS_COLORS.feasibility.inService,
-  },
   {
     key: 'constraint-blocked',
     label: 'Constraint blocked',
@@ -310,6 +311,86 @@ function dispatchDecisionKey(decision: ReplayDispatchDecision): string {
   return `${decision.time}:${decision.decisionRound}:${decision.vehicleId}`;
 }
 
+function unitTimeTicks(startTime: number, endTime: number): number[] {
+  const ticks = [startTime];
+  for (let time = Math.ceil(startTime); time < endTime; time += 1) {
+    if (time > startTime) ticks.push(time);
+  }
+  if (endTime > startTime && ticks[ticks.length - 1] !== endTime) {
+    ticks.push(endTime);
+  }
+  return ticks;
+}
+
+function formatTimelineTime(time: number): string {
+  return Number.isInteger(time) ? String(time) : time.toFixed(1);
+}
+
+function timelinePosition(
+  time: number,
+  startTime: number,
+  duration: number,
+): number {
+  return Math.min(100, Math.max(0, ((time - startTime) / duration) * 100));
+}
+
+interface CandidateVehicleStatusInterval {
+  startTime: number;
+  endTime: number;
+  status: (typeof FEASIBILITY_STATUS_META)[number] | undefined;
+}
+
+function candidateVehicleStatusIntervals(
+  history: CancellationFeasibilityPoint[],
+  vehicleId: number,
+  candidateEndTime: number,
+): CandidateVehicleStatusInterval[] {
+  const intervals: CandidateVehicleStatusInterval[] = [];
+
+  history.forEach((point, pointIndex) => {
+    const endTime = Math.min(
+      candidateEndTime,
+      history[pointIndex + 1]?.time ?? candidateEndTime,
+    );
+    if (endTime <= point.time) return;
+
+    const status = FEASIBILITY_STATUS_META.find(meta =>
+      point[meta.vehicleIdsKey]?.includes(vehicleId),
+    );
+    const previous = intervals[intervals.length - 1];
+    if (
+      previous &&
+      previous.endTime === point.time &&
+      previous.status === status
+    ) {
+      previous.endTime = endTime;
+      return;
+    }
+    intervals.push({
+      startTime: point.time,
+      endTime,
+      status,
+    });
+  });
+
+  return intervals;
+}
+
+function statusIntervalForDecision(
+  intervals: CandidateVehicleStatusInterval[],
+  decisionTime: number,
+): CandidateVehicleStatusInterval | null {
+  const containingInterval = intervals.find(interval =>
+    decisionTime >= interval.startTime && decisionTime < interval.endTime,
+  );
+  if (containingInterval) return containingInterval;
+
+  for (let index = intervals.length - 1; index >= 0; index -= 1) {
+    if (decisionTime === intervals[index].endTime) return intervals[index];
+  }
+  return null;
+}
+
 function observedChoicesForPassenger(
   passenger: Passenger,
   dispatchDecisions: ReplayDispatchDecision[],
@@ -351,6 +432,7 @@ export function CandidateAvailabilityTimeline({
   const startTime = passenger.requestTime;
   const cancellationTime = passenger.cancellationTime ?? startTime;
   const duration = Math.max(1, cancellationTime - startTime);
+  const timeTicks = unitTimeTicks(startTime, cancellationTime);
   const assignmentTime = passenger.assignmentTime ?? null;
   const candidateEndTime = assignmentTime ?? cancellationTime;
   const observedChoices = observedChoicesForPassenger(
@@ -383,16 +465,47 @@ export function CandidateAvailabilityTimeline({
         >
           {vehicleIds.map(vehicleId => {
             const vehicleChoices = choicesByVehicle.get(vehicleId) ?? [];
-            const stackCountByTime = new Map<number, number>();
+            const statusIntervals = candidateVehicleStatusIntervals(
+              history,
+              vehicleId,
+              candidateEndTime,
+            );
+            const markerLayouts = vehicleChoices.map(decision => {
+              const statusInterval = statusIntervalForDecision(
+                statusIntervals,
+                decision.time,
+              );
+              const markerTime = statusInterval
+                ? (statusInterval.startTime + statusInterval.endTime) / 2
+                : decision.time;
+              return {
+                decision,
+                placementKey: statusInterval
+                  ? `${statusInterval.startTime}:${statusInterval.endTime}`
+                  : `time:${decision.time}`,
+                left: timelinePosition(markerTime, startTime, duration),
+              };
+            });
+            const stackCountByPlacement = new Map<string, number>();
             const stackIndexByDecision = new Map<string, number>();
             let maximumStack = 1;
-            for (const decision of vehicleChoices) {
-              const stackIndex = stackCountByTime.get(decision.time) ?? 0;
-              stackIndexByDecision.set(dispatchDecisionKey(decision), stackIndex);
-              stackCountByTime.set(decision.time, stackIndex + 1);
+            for (const markerLayout of markerLayouts) {
+              const stackIndex =
+                stackCountByPlacement.get(markerLayout.placementKey) ?? 0;
+              stackIndexByDecision.set(
+                dispatchDecisionKey(markerLayout.decision),
+                stackIndex,
+              );
+              stackCountByPlacement.set(markerLayout.placementKey, stackIndex + 1);
               maximumStack = Math.max(maximumStack, stackIndex + 1);
             }
-            const trackHeight = Math.max(31, maximumStack * 21 + 8);
+            const markerStackHeight =
+              DECISION_MARKER_HEIGHT + (maximumStack - 1) * DECISION_MARKER_STACK_STEP;
+            const trackHeight = Math.max(
+              CANDIDATE_TRACK_MIN_HEIGHT,
+              markerStackHeight + DECISION_MARKER_STACK_PADDING,
+            );
+            const markerStackTop = (trackHeight - markerStackHeight) / 2;
 
             return (
               <div className="demand-cancellation-vehicle-row" key={vehicleId}>
@@ -401,57 +514,62 @@ export function CandidateAvailabilityTimeline({
                   className="demand-cancellation-vehicle-track"
                   style={{
                     height: `${trackHeight}px`,
-                    borderRightColor: CANCELLATION_ANALYSIS_COLORS.request.selected,
                   }}
                 >
-                  {history.map((point, pointIndex) => {
-                    const intervalEnd = Math.min(
-                      candidateEndTime,
-                      history[pointIndex + 1]?.time ?? candidateEndTime,
+                  {statusIntervals.map(interval => {
+                    const intervalLeft = timelinePosition(
+                      interval.startTime,
+                      startTime,
+                      duration,
                     );
-                    if (intervalEnd <= point.time) return null;
-                    const status = FEASIBILITY_STATUS_META.find(meta =>
-                      point[meta.vehicleIdsKey]?.includes(vehicleId),
+                    const intervalRight = timelinePosition(
+                      interval.endTime,
+                      startTime,
+                      duration,
                     );
                     return (
                       <span
-                        key={`${vehicleId}-${point.time}`}
+                        key={`${vehicleId}-${interval.startTime}`}
                         className="demand-cancellation-vehicle-interval"
                         style={{
-                          left: `${((point.time - startTime) / duration) * 100}%`,
-                          width: `${((intervalEnd - point.time) / duration) * 100}%`,
-                          background: status?.color,
+                          left: `${intervalLeft}%`,
+                          width: `calc(${intervalRight - intervalLeft}% + 1px)`,
+                          background: interval.status?.color,
                         }}
-                        title={status?.label ?? 'Status unavailable'}
+                        title={interval.status?.label ?? 'Status unavailable'}
                       />
                     );
                   })}
-                  {vehicleChoices.map(decision => {
+                  {timeTicks.slice(1, -1).map(time => (
+                    <i
+                      key={`grid-${vehicleId}-${time}`}
+                      className="demand-cancellation-time-gridline"
+                      style={{
+                        left: `${timelinePosition(time, startTime, duration)}%`,
+                      }}
+                      aria-hidden="true"
+                    />
+                  ))}
+                  {markerLayouts.map(({ decision, left }) => {
                     const actionMeta = DISPATCH_ACTION_META[decision.actionType];
                     const decisionKey = dispatchDecisionKey(decision);
                     const stackIndex = stackIndexByDecision.get(decisionKey) ?? 0;
-                    const left = Math.min(
-                      100,
-                      Math.max(0, ((decision.time - startTime) / duration) * 100),
-                    );
                     const targetLabel = decision.requestId == null
                       ? 'Wait'
                       : `${actionMeta.label} R${decision.requestId}`;
-                    const edgeClass = left < 4
-                      ? ' is-left-edge'
-                      : left > 96
-                        ? ' is-right-edge'
-                        : '';
                     return (
                       <button
                         key={decisionKey}
                         type="button"
-                        className={`demand-cancellation-decision-marker is-${decision.actionType}${selectedDecisionKey === decisionKey ? ' is-selected' : ''}${edgeClass}`}
+                        className={`demand-cancellation-decision-marker is-${decision.actionType}${selectedDecisionKey === decisionKey ? ' is-selected' : ''}`}
                         style={{
-                          top: `${4 + stackIndex * 21}px`,
-                          left: `${left}%`,
+                          top: `${markerStackTop + stackIndex * DECISION_MARKER_STACK_STEP}px`,
+                          left: `clamp(${DECISION_MARKER_WIDTH / 2}px, ${left}%, calc(100% - ${DECISION_MARKER_WIDTH / 2}px))`,
+                          width: `${DECISION_MARKER_WIDTH}px`,
+                          height: `${DECISION_MARKER_HEIGHT}px`,
                           background: actionMeta.color,
                           color: actionMeta.textColor,
+                          transform: 'translateX(-50%)',
                         }}
                         title={`t=${decision.time} · round ${decision.decisionRound + 1} · V${vehicleId} could serve R${passenger.id} · selected ${targetLabel}`}
                         aria-label={`At time ${decision.time}, round ${decision.decisionRound + 1}, vehicle ${vehicleId} selected ${targetLabel}`}
@@ -464,6 +582,13 @@ export function CandidateAvailabilityTimeline({
                       </button>
                     );
                   })}
+                  <i
+                    className="demand-cancellation-end-boundary"
+                    style={{
+                      background: CANCELLATION_ANALYSIS_COLORS.request.selected,
+                    }}
+                    aria-hidden="true"
+                  />
                 </div>
               </div>
             );
@@ -471,8 +596,21 @@ export function CandidateAvailabilityTimeline({
           <div className="demand-cancellation-vehicle-axis">
             <span />
             <div>
-              <b>t={startTime}</b>
-              <b>t={cancellationTime}</b>
+              {timeTicks.map((time, index) => {
+                const isFirst = index === 0;
+                const isLast = index === timeTicks.length - 1 && !isFirst;
+                return (
+                  <b
+                    key={time}
+                    className={isFirst ? 'is-start' : isLast ? 'is-end' : undefined}
+                    style={{
+                      left: `${timelinePosition(time, startTime, duration)}%`,
+                    }}
+                  >
+                    t={formatTimelineTime(time)}
+                  </b>
+                );
+              })}
             </div>
           </div>
           <div className="demand-cancellation-status-legend">
@@ -590,6 +728,13 @@ export function RequestPatternPanel({
             : 1;
           const isSelected = passenger.id === selectedRequestId;
           const isCancelled = passenger.status === 'cancelled' || passenger.cancellationTime != null;
+          const isDelivered = !isCancelled &&
+            (passenger.status === 'delivered' || passenger.deliveryTime != null);
+          const outcomeClass = isCancelled
+            ? ' is-cancelled'
+            : isDelivered
+              ? ' is-delivered'
+              : '';
           const endpointLeft = Math.min(
             100,
             Math.max(0, ((endTime - domainStart) / duration) * 100),
@@ -599,7 +744,7 @@ export function RequestPatternPanel({
             <button
               key={passenger.id}
               type="button"
-              className={`request-pattern-row${isSelected ? ' is-selected' : ''}`}
+              className={`request-pattern-row${outcomeClass}${isSelected ? ' is-selected' : ''}`}
               aria-pressed={isSelected}
               onClick={() => onSelectRequest(passenger)}
             >

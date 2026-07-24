@@ -1,4 +1,9 @@
-import { schemeDark2, schemeSet2, schemeTableau10 } from 'd3-scale-chromatic';
+import {
+  schemeDark2,
+  schemeGreys,
+  schemeSet2,
+  schemeTableau10,
+} from 'd3-scale-chromatic';
 
 export function getWsUrl(): string {
   const fromEnv = import.meta.env.VITE_WS_URL;
@@ -16,6 +21,7 @@ export const CHART_ANIMATION_DURATION_MS = Math.round(PLAYBACK_INTERVAL_MS * 0.7
 
 export const RESULT_A_COLOR = '#f59e0b';
 export const RESULT_B_COLOR = '#3b82f6';
+const IN_SERVICE_COLOR = schemeGreys[5][2];
 
 // ColorBrewer Dark2: vehicle states define the semantic color source.
 export const VEHICLE_STATUS_COLORS = {
@@ -36,17 +42,17 @@ export const REQUEST_OUTCOME_COLORS = {
   cancelled: '#e41a1c',
 } as const;
 
-// D3 categorical schemes: Tableau10 for map entities and ColorBrewer Set2
-// for candidate-feasibility categories. Array positions are kept explicit so
-// the same semantic category retains its hue across linked views.
+// D3 and ColorBrewer categorical schemes: marker shape separates vehicles
+// from requests, while color represents status or analytical role. Explicit
+// array positions keep each semantic category consistent across linked views.
 export const CANCELLATION_ANALYSIS_COLORS = {
   vehicle: {
-    idle: schemeTableau10[0],
+    idle: IN_SERVICE_COLOR,
     picking_up: VEHICLE_STATUS_COLORS.picking_up,
     carrying: VEHICLE_STATUS_COLORS.carrying,
   },
   request: {
-    waiting: schemeTableau10[5],
+    waiting: schemeTableau10[9],
     selected: schemeTableau10[2],
   },
   decision: {
@@ -55,7 +61,7 @@ export const CANCELLATION_ANALYSIS_COLORS = {
     wait: schemeTableau10[8],
   },
   feasibility: {
-    inService: schemeSet2[2],
+    inService: IN_SERVICE_COLOR,
     constraintBlocked: schemeSet2[1],
     assignable: schemeSet2[4],
   },

@@ -48,10 +48,10 @@ class FractionalRouteNetwork:
 def build_network():
     network = DRTNetwork()
     network.set_edge_data(
-        DATA_DIR / 'travel_time.csv',
+        DATA_DIR / 'link_list.json',
         DATA_DIR / 'edge_distance.csv',
     )
-    network.set_od_matrix(DATA_DIR / 'od_matrix.csv')
+    network.set_od_matrix(DATA_DIR / 'od_travel_time_dict.json')
     return network
 
 
@@ -334,7 +334,8 @@ class StateBuilderTest(unittest.TestCase):
             network.get_shortest_route(1, 24),
             [1, 3, 12, 13, 24],
         )
-        self.assertEqual(network.get_duration(1, 24), 9)
+        self.assertEqual(network.get_duration(1, 24), 13)
+        self.assertEqual(network.get_duration(15, 22), 3)
         self.assertEqual(network.get_route_distance(1, 24), 15)
 
         source_request = Request(1, 24, 2, 0, network)
@@ -347,7 +348,7 @@ class StateBuilderTest(unittest.TestCase):
         environment.reset()
         vehicle = environment.vehicle_list[0]
         environment._start_pickup(vehicle, environment.active_request_list[0])
-        environment.curr_time = 4
+        environment.curr_time = 5
         vehicle.update_route_progress(environment.curr_time)
 
         encoded_vehicle = extract_vehicle(vehicle, environment)
@@ -377,14 +378,17 @@ class StateBuilderTest(unittest.TestCase):
         environment.curr_time = 1
         environment._clear_pickup_assignment(active_request)
 
-        self.assertEqual(vehicle.total_distance, 2)
+        self.assertAlmostEqual(vehicle.total_distance, 4 / 3)
         movements = encode_vehicle_movements(environment)
         self.assertEqual(len(movements), 1)
         self.assertEqual(movements[0]['endReason'], 'cancelled')
         self.assertEqual(movements[0]['routeNodeIds'], [1, 3, 12, 13, 24])
         self.assertEqual(movements[0]['plannedDistance'], 15)
-        self.assertEqual(movements[0]['travelledDistance'], 2)
-        self.assertEqual(movements[0]['edges'][0]['distanceTravelled'], 2)
+        self.assertAlmostEqual(movements[0]['travelledDistance'], 4 / 3)
+        self.assertAlmostEqual(
+            movements[0]['edges'][0]['distanceTravelled'],
+            4 / 3,
+        )
         self.assertTrue(all(
             edge['distanceTravelled'] == 0
             for edge in movements[0]['edges'][1:]

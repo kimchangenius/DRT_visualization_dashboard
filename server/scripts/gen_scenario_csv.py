@@ -4,7 +4,7 @@
     User_ID, Start_node, End_node, Request_time, Population
 
 원래 `DRT_v2_scenario_runner.py`의 generate_scenario_records 로직을 그대로 가져오되,
-DRT_v2 모듈 의존을 끊고 OD는 `data/od_matrix.csv`에서 읽는다.
+DRT_v2 모듈 의존을 끊고 OD와 링크는 `data/*.json`에서 읽는다.
 
 사용 예
 -------
@@ -16,9 +16,18 @@ $ python scripts/gen_scenario_csv.py --all  # S1~S4, seed 0~4 일괄 생성
 import argparse
 import csv
 import os
+import sys
 
 import numpy as np
-import pandas as pd
+
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.network_data import (  # noqa: E402
+    load_link_travel_times,
+    load_od_travel_times,
+    validate_od_against_links,
+)
 
 
 SCENARIOS = {
@@ -33,14 +42,12 @@ DEFAULT_LAMBDA_HIGH = 6.0
 DEFAULT_POP_P = 0.75
 
 
-def load_od_dict(od_matrix_path):
-    """od_matrix.csv → dict[int o][int d] = duration."""
-    df = pd.read_csv(od_matrix_path, index_col=0)
-    df.columns = df.columns.astype(int)
-    return {
-        int(o): {int(d): float(df.loc[o, d]) for d in df.columns}
-        for o in df.index
-    }
+def load_validated_od_dict(od_path, link_path):
+    """JSON OD를 읽고 링크 최단시간과 일치하는지 검증한다."""
+    od_dict = load_od_travel_times(od_path)
+    links = load_link_travel_times(link_path)
+    validate_od_against_links(od_dict, links)
+    return od_dict
 
 
 def generate_scenario_rows(
@@ -69,11 +76,18 @@ def generate_scenario_rows(
     p_origin = lambdas / lambdas.sum()
     orig = rng.choice(node_ids, size=n_req, p=p_origin)
 
-    dest = rng.choice(node_ids, size=n_req)
-    same = orig == dest
-    while np.any(same):
-        dest[same] = rng.choice(node_ids, size=int(np.sum(same)))
-        same = orig == dest
+    valid_destinations = {
+        origin: np.array([
+            destination
+            for destination, duration in destinations.items()
+            if destination != origin and duration > 0
+        ])
+        for origin, destinations in od_dict.items()
+    }
+    dest = np.array([
+        rng.choice(valid_destinations[int(origin)])
+        for origin in orig
+    ])
 
     pop = rng.geometric(p=pop_p, size=n_req)
 
@@ -114,7 +128,8 @@ def parse_args():
     p.add_argument("--lambda-base", type=float, default=DEFAULT_LAMBDA_BASE)
     p.add_argument("--lambda-high", type=float, default=DEFAULT_LAMBDA_HIGH)
     p.add_argument("--pop-p", type=float, default=DEFAULT_POP_P, help="Geometric 인원 분포의 p")
-    p.add_argument("--od", default="data/od_matrix.csv")
+    p.add_argument("--od", default="data/od_travel_time_dict.json")
+    p.add_argument("--links", default="data/link_list.json")
     p.add_argument("--out", default=None, help="결과 CSV 경로 (미지정 시 data/requests_<S>_seed<n>_n<N>.csv)")
     p.add_argument("--all", action="store_true", help="S1~S4 × seed 0~(--seeds-1) 일괄 생성")
     p.add_argument("--seeds", type=int, default=5, help="--all 모드에서 사용할 seed 개수")
@@ -141,13 +156,15 @@ def generate_scenario_csv(
     lambda_base=DEFAULT_LAMBDA_BASE,
     lambda_high=DEFAULT_LAMBDA_HIGH,
     pop_p=DEFAULT_POP_P,
-    od_filename="od_matrix.csv",
+    od_filename="od_travel_time_dict.json",
+    link_filename="link_list.json",
     out_dir=None,
     out_path=None,
 ):
     """main.py 등에서 바로 호출할 수 있는 시나리오 CSV 생성 헬퍼."""
     od_path = os.path.join(data_dir, od_filename)
-    od_dict = load_od_dict(od_path)
+    link_path = os.path.join(data_dir, link_filename)
+    od_dict = load_validated_od_dict(od_path, link_path)
     rows = generate_scenario_rows(
         scenario=scenario,
         seed=seed,
@@ -170,7 +187,7 @@ def generate_scenario_csv(
 
 def main():
     args = parse_args()
-    od_dict = load_od_dict(args.od)
+    od_dict = load_validated_od_dict(args.od, args.links)
 
     if args.all:
         for sc in SCENARIOS.keys():

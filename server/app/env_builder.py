@@ -25,8 +25,8 @@ class EnvBuilder:
             else None
         )
         self.vehicle_pos_path = os.path.join(data_dir, 'vehicle_positions.csv')
-        self.od_matrix_path = os.path.join(data_dir, 'od_matrix.csv')
-        self.travel_time_path = os.path.join(data_dir, 'travel_time.csv')
+        self.od_matrix_path = os.path.join(data_dir, 'od_travel_time_dict.json')
+        self.link_list_path = os.path.join(data_dir, 'link_list.json')
         self.edge_distance_path = os.path.join(data_dir, 'edge_distance.csv')
 
     def load_requests(self, network):
@@ -98,7 +98,7 @@ class EnvBuilder:
 
     def build(self):
         network = DRTNetwork()
-        network.set_edge_data(self.travel_time_path, self.edge_distance_path)
+        network.set_edge_data(self.link_list_path, self.edge_distance_path)
         network.set_od_matrix(self.od_matrix_path)
 
         if self.test_episode_path is None:

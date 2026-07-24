@@ -152,6 +152,19 @@ function passengerEventGroupCount(
   ).size;
 }
 
+function eventRequestIdsInInterval(
+  passengerEvents: PassengerEventDatum[],
+  startTime: number,
+  endTime: number,
+): number[] {
+  const requestIds = new Set<number>();
+  for (const eventGroup of passengerEvents) {
+    if (eventGroup.time < startTime || eventGroup.time > endTime) continue;
+    for (const event of eventGroup.events) requestIds.add(event.passengerId);
+  }
+  return [...requestIds].sort((left, right) => left - right);
+}
+
 function statusAt(
   source: ReplayVehicleSource | null,
   vehicleId: number,
@@ -911,6 +924,11 @@ function StatusTimelineRow({
                     status: segment.status as VehiclePatternSelection['status'],
                     startTime: segment.startTime,
                     endTime: segment.endTime,
+                    eventRequestIds: eventRequestIdsInInterval(
+                      passengerEventData,
+                      segment.startTime,
+                      segment.endTime,
+                    ),
                   });
                 } : undefined}
                 disabled={!clickable}
@@ -1194,6 +1212,11 @@ function VehiclePatternRow({
           status: 'range',
           startTime: rangeStart,
           endTime: rangeEnd,
+          eventRequestIds: eventRequestIdsInInterval(
+            passengerEventData,
+            rangeStart,
+            rangeEnd,
+          ),
         });
       }
       return;

@@ -1,4 +1,9 @@
-import { useMemo } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
 
 import { nodeMap, nodes, undirectedLinks } from '../data/siouxFallsNetwork';
 import {
@@ -21,20 +26,27 @@ interface CancellationContextMapProps {
   appearance?: 'dashboard' | 'paper';
 }
 
+interface WaitingRequestsTooltipState {
+  nodeId: number;
+  requests: Passenger[];
+  x: number;
+  y: number;
+  horizontalPlacement: 'left' | 'right';
+  verticalPlacement: 'above' | 'below';
+}
+
 const PADDING = 22;
 const MAP_WIDTH = 200;
 const MAP_HEIGHT = 180;
-const SELECTED_REQUEST_SIZE = 16;
-const OTHER_REQUEST_SIZE = 12;
+const REQUEST_MARKER_SIZE = 12;
+const SELECTED_REQUEST_MARKER_SIZE = 15;
+const DROPOFF_TARGET_WIDTH = 14;
+const DROPOFF_TARGET_HEIGHT = 12;
 const SELECTED_REQUEST_COLOR = CANCELLATION_ANALYSIS_COLORS.request.selected;
 const OTHER_REQUEST_COLOR = CANCELLATION_ANALYSIS_COLORS.request.waiting;
 
 function vehicleColor(status: Vehicle['status']): string {
   return CANCELLATION_ANALYSIS_COLORS.vehicle[status];
-}
-
-function vehicleLabelColor(status: Vehicle['status']): string {
-  return status === 'idle' ? '#ffffff' : '#111827';
 }
 
 function waitingRequestsByOrigin(
@@ -64,6 +76,8 @@ export default function CancellationContextMap({
   dispatchDecisionFocus = null,
   appearance = 'dashboard',
 }: CancellationContextMapProps) {
+  const [waitingRequestsTooltip, setWaitingRequestsTooltip] =
+    useState<WaitingRequestsTooltipState | null>(null);
   const selectedRequest = frame.passengers.find(
     passenger => passenger.id === selectedRequestId,
   ) ?? null;
@@ -72,6 +86,10 @@ export default function CancellationContextMap({
     : frame.passengers.find(
       passenger => passenger.id === dispatchDecisionFocus.requestId,
     ) ?? null;
+  const focusedPickupRequestId =
+    dispatchDecisionFocus?.actionType === 'pickup'
+      ? dispatchDecisionFocus.requestId
+      : null;
   const priorRoundPickupRequestIds = useMemo(() => new Set(
     dispatchDecisionFocus == null
       ? []
@@ -85,17 +103,8 @@ export default function CancellationContextMap({
       )),
   ), [dispatchDecisionFocus, dispatchDecisions]);
   const excludedRequestIds = useMemo(() => {
-    const ids = new Set([selectedRequestId, ...priorRoundPickupRequestIds]);
-    if (
-      dispatchDecisionFocus?.actionType === 'pickup' &&
-      dispatchDecisionFocus.requestId != null
-    ) {
-      ids.add(dispatchDecisionFocus.requestId);
-    }
-    return ids;
+    return new Set([selectedRequestId, ...priorRoundPickupRequestIds]);
   }, [
-    dispatchDecisionFocus?.actionType,
-    dispatchDecisionFocus?.requestId,
     priorRoundPickupRequestIds,
     selectedRequestId,
   ]);
@@ -103,16 +112,34 @@ export default function CancellationContextMap({
     () => waitingRequestsByOrigin(frame.passengers, excludedRequestIds),
     [excludedRequestIds, frame.passengers],
   );
-  const decisionTargetNode = decisionRequest && dispatchDecisionFocus
-    ? nodeMap.get(
-      dispatchDecisionFocus.actionType === 'dropoff'
-        ? decisionRequest.destinationNodeId
-        : decisionRequest.originNodeId,
-    ) ?? null
+  const decisionTargetNode =
+    decisionRequest && dispatchDecisionFocus?.actionType === 'dropoff'
+      ? nodeMap.get(decisionRequest.destinationNodeId) ?? null
     : null;
-  const decisionTargetSize = dispatchDecisionFocus?.actionType === 'dropoff'
-    ? OTHER_REQUEST_SIZE
-    : 14;
+
+  useEffect(() => {
+    setWaitingRequestsTooltip(null);
+  }, [dispatchDecisionFocus, frame.metrics.currentTime, selectedRequestId]);
+
+  const updateWaitingRequestsTooltip = (
+    event: ReactMouseEvent<SVGRectElement>,
+    nodeId: number,
+    requests: Passenger[],
+  ) => {
+    const container = event.currentTarget.ownerSVGElement?.parentElement;
+    if (!container) return;
+    const bounds = container.getBoundingClientRect();
+    const x = Math.min(bounds.width - 8, Math.max(8, event.clientX - bounds.left));
+    const y = Math.min(bounds.height - 8, Math.max(8, event.clientY - bounds.top));
+    setWaitingRequestsTooltip({
+      nodeId,
+      requests,
+      x,
+      y,
+      horizontalPlacement: x > bounds.width / 2 ? 'left' : 'right',
+      verticalPlacement: y > bounds.height / 2 ? 'above' : 'below',
+    });
+  };
 
   return (
     <div className={`cancellation-context-map${appearance === 'paper' ? ' is-paper' : ''}`}>
@@ -149,59 +176,67 @@ export default function CancellationContextMap({
             />
           ))}
 
-          {selectedRequest ? (() => {
-            const origin = nodeMap.get(selectedRequest.originNodeId);
-            if (!origin) return null;
-            const markerOffset = SELECTED_REQUEST_SIZE / 2;
-            return (
-              <g className="cancellation-context-selected-request">
-                <rect
-                  x={origin.x - markerOffset}
-                  y={origin.y - markerOffset}
-                  width={SELECTED_REQUEST_SIZE}
-                  height={SELECTED_REQUEST_SIZE}
-                  fill={SELECTED_REQUEST_COLOR}
-                  transform={`rotate(45 ${origin.x} ${origin.y})`}
-                >
-                  <title>{`Selected R${selectedRequest.id}: origin N${selectedRequest.originNodeId}`}</title>
-                </rect>
-              </g>
-            );
-          })() : null}
-
           {[...otherRequestsByNode].map(([nodeId, requests]) => {
             const node = nodeMap.get(nodeId);
             if (!node) return null;
-            const requestIds = requests.map(request => `R${request.id}`).join(', ');
-            const markerOffset = OTHER_REQUEST_SIZE / 2;
+            const markerOffset = REQUEST_MARKER_SIZE / 2;
+            const containsFocusedPickupRequest =
+              focusedPickupRequestId != null &&
+              requests.some(request => request.id === focusedPickupRequestId);
             return (
               <g key={`requests-${nodeId}`} className="cancellation-context-other-request">
                 <rect
                   x={node.x - markerOffset}
                   y={node.y - markerOffset}
-                  width={OTHER_REQUEST_SIZE}
-                  height={OTHER_REQUEST_SIZE}
-                  fill={OTHER_REQUEST_COLOR}
-                >
-                  <title>{`${requestIds}: waiting at N${nodeId}`}</title>
-                </rect>
+                  width={REQUEST_MARKER_SIZE}
+                  height={REQUEST_MARKER_SIZE}
+                  fill={
+                    containsFocusedPickupRequest
+                      ? CANCELLATION_ANALYSIS_COLORS.decision.pickup
+                      : OTHER_REQUEST_COLOR
+                  }
+                  onMouseEnter={event => updateWaitingRequestsTooltip(event, nodeId, requests)}
+                  onMouseMove={event => updateWaitingRequestsTooltip(event, nodeId, requests)}
+                  onMouseLeave={() => setWaitingRequestsTooltip(null)}
+                />
               </g>
             );
           })}
 
-          {decisionTargetNode && decisionRequest && dispatchDecisionFocus ? (
-            <g className={`cancellation-context-decision-target is-${dispatchDecisionFocus.actionType}`}>
-              <rect
-                x={decisionTargetNode.x - decisionTargetSize / 2}
-                y={decisionTargetNode.y - decisionTargetSize / 2}
-                width={decisionTargetSize}
-                height={decisionTargetSize}
-                fill={CANCELLATION_ANALYSIS_COLORS.decision[dispatchDecisionFocus.actionType]}
-              >
-                <title>
-                  {`${dispatchDecisionFocus.actionType === 'pickup' ? 'Pickup origin' : 'Drop-off destination'} for R${decisionRequest.id}`}
-                </title>
-              </rect>
+          {selectedRequest ? (() => {
+            const origin = nodeMap.get(selectedRequest.originNodeId);
+            if (!origin) return null;
+            const markerOffset = SELECTED_REQUEST_MARKER_SIZE / 2;
+            return (
+              <g className="cancellation-context-selected-request">
+                <rect
+                  x={origin.x - markerOffset}
+                  y={origin.y - markerOffset}
+                  width={SELECTED_REQUEST_MARKER_SIZE}
+                  height={SELECTED_REQUEST_MARKER_SIZE}
+                  fill={SELECTED_REQUEST_COLOR}
+                  transform={`rotate(45 ${origin.x} ${origin.y})`}
+                />
+              </g>
+            );
+          })() : null}
+
+          {decisionTargetNode && decisionRequest && dispatchDecisionFocus?.actionType === 'dropoff' ? (
+            <g
+              className="cancellation-context-decision-target is-dropoff"
+              style={{
+                color: CANCELLATION_ANALYSIS_COLORS.decision.dropoff,
+              }}
+              role="img"
+              aria-label={`Observed drop-off node N${decisionTargetNode.id}`}
+            >
+              <polygon
+                points={[
+                  `${decisionTargetNode.x - DROPOFF_TARGET_WIDTH / 2},${decisionTargetNode.y - DROPOFF_TARGET_HEIGHT}`,
+                  `${decisionTargetNode.x + DROPOFF_TARGET_WIDTH / 2},${decisionTargetNode.y - DROPOFF_TARGET_HEIGHT}`,
+                  `${decisionTargetNode.x},${decisionTargetNode.y}`,
+                ].join(' ')}
+              />
             </g>
           ) : null}
 
@@ -218,24 +253,26 @@ export default function CancellationContextMap({
               : isFocused && dispatchDecisionFocus?.actionType === 'dropoff'
                 ? 'carrying'
                 : effectiveStatus;
+            const markerColor = isFocused
+              ? vehicleColor(displayedStatus)
+              : CANCELLATION_ANALYSIS_COLORS.feasibility.inService;
             return (
               <g
                 key={vehicle.id}
                 className={`cancellation-context-vehicle${isFocused ? ' is-decision-focus' : ''}`}
+                pointerEvents="none"
               >
                 <circle
                   className="cancellation-context-vehicle-marker"
                   cx={position.x}
                   cy={position.y}
                   r={6.5}
-                  fill={vehicleColor(displayedStatus)}
-                >
-                  <title>{`V${vehicle.id}: ${displayedStatus.replace('_', ' ')} at t=${frame.metrics.currentTime}`}</title>
-                </circle>
+                  fill={markerColor}
+                />
                 <text
                   x={position.x}
                   y={position.y + 0.35}
-                  fill={vehicleLabelColor(displayedStatus)}
+                  fill="#111827"
                 >
                   V{vehicle.id}
                 </text>
@@ -243,36 +280,68 @@ export default function CancellationContextMap({
             );
           })}
 
-          {[...otherRequestsByNode].map(([nodeId, requests]) => {
-            const node = nodeMap.get(nodeId);
-            if (!node) return null;
-            const badgeX = node.x + 7;
-            const badgeY = node.y - 7;
-            return (
-              <g key={`request-count-${nodeId}`} className="cancellation-context-request-count">
-                <circle cx={badgeX} cy={badgeY} r={4.2} fill={OTHER_REQUEST_COLOR} />
-                <text x={badgeX} y={badgeY + 0.35}>{requests.length}</text>
-              </g>
-            );
-          })}
         </svg>
+        {waitingRequestsTooltip ? (
+          <div
+            className={`map-hover-tooltip cancellation-context-tooltip is-${waitingRequestsTooltip.horizontalPlacement} is-${waitingRequestsTooltip.verticalPlacement}`}
+            style={{ left: waitingRequestsTooltip.x, top: waitingRequestsTooltip.y }}
+            role="tooltip"
+          >
+            <div className="map-hover-tooltip-values">
+              <div>
+                <span>Node</span>
+                <b>N{waitingRequestsTooltip.nodeId}</b>
+              </div>
+              <div>
+                <span>Waiting</span>
+                <b>{waitingRequestsTooltip.requests.length}</b>
+              </div>
+              <div>
+                <span>Requests</span>
+                <b>
+                  {waitingRequestsTooltip.requests
+                    .map(request => request.id)
+                    .sort((left, right) => left - right)
+                    .map(requestId => `R${requestId}`)
+                    .join(', ')}
+                </b>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
       <div className="cancellation-context-footer">
-        <span><i style={{ background: CANCELLATION_ANALYSIS_COLORS.vehicle.idle }} />Idle</span>
+        {/* <span><i style={{ background: CANCELLATION_ANALYSIS_COLORS.feasibility.inService }} />Vehicle</span> */}
         <span><i style={{ background: CANCELLATION_ANALYSIS_COLORS.vehicle.picking_up }} />Picking up</span>
         <span><i style={{ background: CANCELLATION_ANALYSIS_COLORS.vehicle.carrying }} />Carrying</span>
-        <span><i className="is-request" style={{ background: OTHER_REQUEST_COLOR }} />Other waiting requests</span>
+        <span><i className="is-request" style={{ background: OTHER_REQUEST_COLOR }} />Waiting request</span>
         <span><i className="is-selected-request" style={{ background: SELECTED_REQUEST_COLOR }} />Selected request</span>
-        {dispatchDecisionFocus ? (
+        {/* {dispatchDecisionFocus ? (
           <span><i className="is-focused-vehicle" />Focused vehicle</span>
-        ) : null}
+        ) : null} */}
         {dispatchDecisionFocus?.requestId != null ? (
           <span>
-            <i
-              className={`is-decision-target is-${dispatchDecisionFocus.actionType}`}
-              style={{ background: CANCELLATION_ANALYSIS_COLORS.decision[dispatchDecisionFocus.actionType] }}
-            />
-            {dispatchDecisionFocus.actionType === 'pickup' ? 'Observed pickup target' : 'Observed drop-off target'}
+            {dispatchDecisionFocus.actionType === 'pickup' ? (
+              <>
+                <i
+                  className="is-request"
+                  style={{ background: CANCELLATION_ANALYSIS_COLORS.decision.pickup }}
+                />
+                Observed pickup request
+              </>
+            ) : (
+              <>
+                <svg
+                  className="cancellation-context-footer-target-icon"
+                  viewBox="0 0 12 11"
+                  style={{ color: CANCELLATION_ANALYSIS_COLORS.decision.dropoff }}
+                  aria-hidden="true"
+                >
+                  <polygon points="1,1 11,1 6,10" />
+                </svg>
+                Observed drop-off destination
+              </>
+            )}
           </span>
         ) : null}
       </div>

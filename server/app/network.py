@@ -3,9 +3,9 @@ import heapq
 import math
 
 import numpy as np
-import pandas as pd
 
 import app.config as cfg
+from app.network_data import load_link_travel_times, load_od_travel_times
 
 
 class DRTNetwork:
@@ -26,7 +26,7 @@ class DRTNetwork:
     def _undirected_edge_key(from_node_id, to_node_id):
         return tuple(sorted((from_node_id, to_node_id)))
 
-    def set_edge_data(self, travel_time_path, distance_path):
+    def set_edge_data(self, link_list_path, distance_path):
         distances = {}
         with open(distance_path, newline='', encoding='utf-8-sig') as csvfile:
             for row in csv.DictReader(csvfile):
@@ -44,33 +44,28 @@ class DRTNetwork:
 
         edge_data = {}
         edge_adjacency = {}
-        with open(travel_time_path, newline='', encoding='utf-8-sig') as csvfile:
-            for row in csv.DictReader(csvfile):
-                from_node_id = int(row['From'])
-                to_node_id = int(row['To'])
-                travel_time = float(row['TravelTime'])
-                if travel_time <= 0:
-                    raise ValueError(
-                        f'Edge travel time must be positive: {from_node_id}->{to_node_id}'
-                    )
-                edge_key = (from_node_id, to_node_id)
-                if edge_key in edge_data:
-                    raise ValueError(
-                        f'Duplicate directed edge: {from_node_id}->{to_node_id}'
-                    )
-                distance_key = self._undirected_edge_key(from_node_id, to_node_id)
-                if distance_key not in distances:
-                    raise ValueError(
-                        f'Missing edge distance: {from_node_id}->{to_node_id}'
-                    )
-                edge = {
-                    'from': from_node_id,
-                    'to': to_node_id,
-                    'travel_time': travel_time,
-                    'distance': distances[distance_key],
-                }
-                edge_data[edge_key] = edge
-                edge_adjacency.setdefault(from_node_id, []).append(edge)
+        for link in load_link_travel_times(link_list_path):
+            from_node_id = link['from']
+            to_node_id = link['to']
+            travel_time = link['travel_time']
+            edge_key = (from_node_id, to_node_id)
+            if edge_key in edge_data:
+                raise ValueError(
+                    f'Duplicate directed edge: {from_node_id}->{to_node_id}'
+                )
+            distance_key = self._undirected_edge_key(from_node_id, to_node_id)
+            if distance_key not in distances:
+                raise ValueError(
+                    f'Missing edge distance: {from_node_id}->{to_node_id}'
+                )
+            edge = {
+                'from': from_node_id,
+                'to': to_node_id,
+                'travel_time': travel_time,
+                'distance': distances[distance_key],
+            }
+            edge_data[edge_key] = edge
+            edge_adjacency.setdefault(from_node_id, []).append(edge)
 
         unused_distances = set(distances).difference(
             self._undirected_edge_key(*edge_key) for edge_key in edge_data
@@ -88,19 +83,17 @@ class DRTNetwork:
             self._validate_routes_against_od()
 
     def set_od_matrix(self, path):
-        df = pd.read_csv(path, index_col=0)
-        df.index = df.index.astype(int)
-        df.columns = df.columns.astype(int)
-        self.num_nodes = len(df.index)
-        assert self.num_nodes == cfg.NUM_NODES, (
-            f"OD matrix has {self.num_nodes} nodes but cfg.NUM_NODES={cfg.NUM_NODES}"
-        )
-        self.od_dur_mat = {
-            int(o): {int(d): float(df.loc[o, d]) for d in df.columns}
-            for o in df.index
-        }
-        self.max_duration = float(
-            max(df.loc[o, d] for o in df.index for d in df.columns)
+        self.od_dur_mat = load_od_travel_times(path)
+        self.num_nodes = len(self.od_dur_mat)
+        if self.num_nodes != cfg.NUM_NODES:
+            raise ValueError(
+                f"OD data has {self.num_nodes} nodes but "
+                f"cfg.NUM_NODES={cfg.NUM_NODES}"
+            )
+        self.max_duration = max(
+            duration
+            for destinations in self.od_dur_mat.values()
+            for duration in destinations.values()
         )
 
         N = cfg.NUM_NODES
@@ -108,7 +101,7 @@ class DRTNetwork:
         # 노드 1..N (model 입장에선 index 1..N)
         for i in range(1, N + 1):
             for j in range(1, N + 1):
-                dur = float(df.loc[i, j])
+                dur = self.od_dur_mat[i][j]
                 ew[i, j] = 1.0 / (1.0 + dur)
         # 0번(=no node) self-loop만 약하게
         ew[0, 0] = 1e-3

@@ -241,6 +241,7 @@ export interface VehiclePatternSelection {
   status: Extract<VehicleStatus, 'idle' | 'picking_up' | 'carrying'> | 'range';
   startTime: number;
   endTime: number;
+  eventRequestIds: number[];
 }
 
 export interface EdgeTraversal {
